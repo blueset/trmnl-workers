@@ -2,11 +2,18 @@ import type { RandomCodepointResponse } from "./types";
 import { fetchRandomHex, fetchSvg, fetchMeta, fetchBlockSvg, fetchPlangothicSvg } from "./api";
 import { labelProperties, processDescriptions, processSVG } from "./utils";
 
-export default {
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
+interface Env {
+  TRMNL_WORKERS_KV: KVNamespace;
+}
 
-    try {
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    const KV_KEY = "codepoints_lkg";
+    const TIMEOUT_MS = 4000;
+
+    // Helper function to perform the main logic
+    const performMainLogic = async (): Promise<string> => {
       const hex = url.searchParams.get("hex") || await fetchRandomHex();
       const [svg, meta] = await Promise.all([fetchSvg(hex), fetchMeta(hex)]);
 
@@ -36,7 +43,22 @@ export default {
       const payload: RandomCodepointResponse = {
         hex, codepoint, char, meta, svgs, descriptions
       };
-      const body = JSON.stringify(payload, null, 2);
+      return JSON.stringify(payload, null, 2);
+    };
+
+    // Wrap main logic with timeout
+    const mainLogicWithTimeout = Promise.race([
+      performMainLogic(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Timeout")), TIMEOUT_MS)
+      ),
+    ]);
+
+    try {
+      const body = await mainLogicWithTimeout;
+      
+      // Store successful response in KV
+      await env.TRMNL_WORKERS_KV.put(KV_KEY, body);
 
       return new Response(body, {
         status: 200,
@@ -46,6 +68,21 @@ export default {
         },
       });
     } catch (err) {
+      // If main logic fails or times out, try to use cached value
+      const cachedBody = await env.TRMNL_WORKERS_KV.get(KV_KEY);
+      
+      if (cachedBody) {
+        return new Response(cachedBody, {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+            "x-cache": "hit",
+          },
+        });
+      }
+
+      // No cached value available, return error
       const message = err instanceof Error ? err.message : "Unknown error";
       return new Response(
         JSON.stringify({ error: message }, null, 2),

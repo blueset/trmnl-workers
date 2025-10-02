@@ -1,3 +1,7 @@
 name = "trmnl"
 main = "src/index.ts"
 compatibility_date = "2024-05-01"
+
+[[kv_namespaces]]
+binding = "TRMNL_WORKERS_KV"
+id = "bd9dad65430948879f23dfba951de218"
