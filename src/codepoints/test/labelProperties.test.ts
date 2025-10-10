@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { labelProperties } from '../src/utils';
-import { CodepointMeta } from '../src/types';
+import { labelProperties } from '../utils';
+import { CodepointMeta } from '../types';
 
 describe('labelProperties', () => {
   it('adds human-friendly labels for all Unicode properties', () => {

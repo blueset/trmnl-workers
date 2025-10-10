@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { processSVG } from "../src/utils";
-import { CodepointMeta } from "../src/types";
+import { processSVG } from "../utils";
+import { CodepointMeta } from "../types";
 
 // Minimal meta factory: only field used is _?.imagesource
 function meta(imagesource: string | undefined | null): CodepointMeta {

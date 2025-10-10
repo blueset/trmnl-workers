@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { CodepointMeta } from "../src/types";
+import { CodepointMeta } from "../types";
 
 // Helper to fabricate a minimal CodepointMeta with only fields used by processDescriptions
 function metaWith(
