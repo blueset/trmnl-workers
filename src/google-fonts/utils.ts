@@ -59,27 +59,68 @@ export async function getSampleText(metadata: Record<string, any>): Promise<stri
             // Fetch the languages directory to find matching files
             // Use cached directory listing
             if (!languageDirectoryCache) {
-                const response = await fetch('https://api.github.com/repos/google/fonts/contents/lang/Lib/gflanguages/data/languages', {
+                // Step 1: Get the root tree object ID
+                const repoResponse = await fetch('https://api.github.com/repos/google/fonts', {
                     headers: {
                         'User-Agent': 'trmnl-workers',
                         'Accept': 'application/vnd.github.v3+json'
                     }
                 });
                 
-                if (response.ok) {
-                    languageDirectoryCache = await response.json();
+                if (repoResponse.ok) {
+                    const repoData: any = await repoResponse.json();
+                    const defaultBranch = repoData.default_branch || 'main';
+                    
+                    // Get the commit to find the tree SHA
+                    const commitResponse = await fetch(`https://api.github.com/repos/google/fonts/commits/${defaultBranch}`, {
+                        headers: {
+                            'User-Agent': 'trmnl-workers',
+                            'Accept': 'application/vnd.github.v3+json'
+                        }
+                    });
+                    
+                    if (commitResponse.ok) {
+                        const commitData: any = await commitResponse.json();
+                        const treeSha = commitData.commit.tree.sha;
+                        
+                        // Step 2: Get file list using tree API
+                        const treeResponse = await fetch(`https://api.github.com/repos/google/fonts/git/trees/${treeSha}?recursive=1`, {
+                            headers: {
+                                'User-Agent': 'trmnl-workers',
+                                'Accept': 'application/vnd.github.v3+json'
+                            }
+                        });
+                        
+                        if (treeResponse.ok) {
+                            const treeData: any = await treeResponse.json();
+                            // Filter for files in the languages directory
+                            const languageFiles = treeData.tree
+                                .filter((item: any) => 
+                                    item.path.startsWith('lang/Lib/gflanguages/data/languages/') &&
+                                    item.path.endsWith('.textproto') &&
+                                    item.type === 'blob'
+                                )
+                                .map((item: any) => ({
+                                    name: item.path.split('/').pop(),
+                                    path: item.path,
+                                    type: 'file'
+                                }));
+                            languageDirectoryCache = languageFiles;
+                        }
+                    }
                 }
             }
             
             if (languageDirectoryCache) {
-                const pattern = new RegExp(`^\\w+_${metadata.primary_script}\\.textproto$`);
+                const pattern = new RegExp(`${metadata.primary_script}\\.textproto$`, 'ig');
                 
                 // Find all matching files
                 const matchingFiles = languageDirectoryCache.filter(file => pattern.test(file.name));
-                
+                // console.log('Matching language files:', matchingFiles);
                 // Try each matching file until we find one with sample_text
                 for (const file of matchingFiles) {
                     const langData = await fetchAndParseTextproto(`lang/Lib/gflanguages/data/languages/${file.name}`);
+                    // console.log('Checked language file:', file.name, langData);
                     if (langData?.sample_text) {
                         metadata.primary_language = file.name.replace('.textproto', '');
                         return langData.sample_text;
@@ -111,7 +152,7 @@ export async function fetchGitHubContents(url: string): Promise<GitHubContent[]>
     });
     
     if (!response.ok) {
-        throw new Error(`GitHub API error: ${response.status}`);
+        throw new Error(`GitHub API error: ${response.status}, ${response.statusText}, ${await response.text()}`);
     }
     
     const contents: GitHubContent[] = await response.json();
