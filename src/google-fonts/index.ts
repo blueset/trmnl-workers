@@ -48,7 +48,8 @@ async function getRandomFontFolder(githubToken?: string): Promise<MetadataInfo> 
                     'User-Agent': 'trmnl-workers',
                     'Accept': 'application/vnd.github.v3+json',
                     ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {})
-                }
+                },
+                cf: { cacheEverything: true }
             });
             
             if (metadataResponse.ok) {
@@ -57,7 +58,8 @@ async function getRandomFontFolder(githubToken?: string): Promise<MetadataInfo> 
                 // Fetch the actual content
                 if (metadataFile.download_url) {
                     const contentResponse = await fetch(metadataFile.download_url, {
-                        headers: githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}
+                        headers: githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {},
+                        cf: { cacheEverything: true }
                     });
                     const content = await contentResponse.text();
                     

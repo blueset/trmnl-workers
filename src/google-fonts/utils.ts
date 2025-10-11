@@ -36,7 +36,8 @@ export async function fetchAndParseTextproto(path: string, githubToken?: string)
     try {
         const url = `https://raw.githubusercontent.com/google/fonts/main/${path}`;
         const response = await fetch(url, {
-            headers: githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}
+            headers: githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {},
+            cf: { cacheEverything: true }
         });
         
         if (!response.ok) {
@@ -76,7 +77,8 @@ export async function getSampleText(metadata: Record<string, any>, githubToken?:
             if (!languageDirectoryCache) {
                 // Step 1: Get the root tree object ID
                 const repoResponse = await fetch('https://api.github.com/repos/google/fonts', {
-                    headers: getGitHubHeaders(githubToken)
+                    headers: getGitHubHeaders(githubToken),
+                    cf: { cacheEverything: true }
                 });
                 
                 if (repoResponse.ok) {
@@ -85,7 +87,8 @@ export async function getSampleText(metadata: Record<string, any>, githubToken?:
                     
                     // Get the commit to find the tree SHA
                     const commitResponse = await fetch(`https://api.github.com/repos/google/fonts/commits/${defaultBranch}`, {
-                        headers: getGitHubHeaders(githubToken)
+                        headers: getGitHubHeaders(githubToken),
+                        cf: { cacheEverything: true }
                     });
                     
                     if (commitResponse.ok) {
@@ -94,7 +97,8 @@ export async function getSampleText(metadata: Record<string, any>, githubToken?:
                         
                         // Step 2: Get file list using tree API
                         const treeResponse = await fetch(`https://api.github.com/repos/google/fonts/git/trees/${treeSha}?recursive=1`, {
-                            headers: getGitHubHeaders(githubToken)
+                            headers: getGitHubHeaders(githubToken),
+                            cf: { cacheEverything: true }
                         });
                         
                         if (treeResponse.ok) {
@@ -151,7 +155,8 @@ export async function fetchGitHubContents(url: string, githubToken?: string): Pr
     }
     
     const response = await fetch(url, {
-        headers: getGitHubHeaders(githubToken)
+        headers: getGitHubHeaders(githubToken),
+        cf: { cacheEverything: true }
     });
     
     if (!response.ok) {
@@ -183,7 +188,9 @@ export async function getAxisRegistry(): Promise<AxisRegistryEntry[]> {
     }
     
     try {
-        const response = await fetch('https://raw.githubusercontent.com/fontsource/google-font-metadata/refs/heads/main/data/axis-registry.json');
+        const response = await fetch('https://raw.githubusercontent.com/fontsource/google-font-metadata/refs/heads/main/data/axis-registry.json', {
+            cf: { cacheEverything: true }
+        });
         if (!response.ok) {
             throw new Error(`Failed to fetch axis registry: ${response.status}`);
         }
@@ -220,7 +227,9 @@ export async function getFamiliesCsv(): Promise<string> {
     }
     
     try {
-        const response = await fetch('https://raw.githubusercontent.com/google/fonts/refs/heads/main/tags/all/families.csv');
+        const response = await fetch('https://raw.githubusercontent.com/google/fonts/refs/heads/main/tags/all/families.csv', {
+            cf: { cacheEverything: true }
+        });
         if (!response.ok) {
             throw new Error(`Failed to fetch families.csv: ${response.status}`);
         }
