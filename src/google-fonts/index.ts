@@ -3,6 +3,7 @@ import {
     getSampleText, 
     fetchGitHubContents,
     enrichAxesWithRegistry,
+    getFontQualities,
     type GitHubContent,
     type MetadataInfo
 } from './utils';
@@ -10,7 +11,7 @@ import {
 // Cache for all subfolders
 let allSubfoldersCache: GitHubContent[] | null = null;
 
-async function getRandomFontFolder(): Promise<MetadataInfo> {
+async function getRandomFontFolder(githubToken?: string): Promise<MetadataInfo> {
     // Check cache first
     if (!allSubfoldersCache) {
         const folders = [
@@ -20,7 +21,7 @@ async function getRandomFontFolder(): Promise<MetadataInfo> {
         ];
         
         // Fetch all subfolders from all three directories
-        const allSubfoldersPromises = folders.map(url => fetchGitHubContents(url));
+        const allSubfoldersPromises = folders.map(url => fetchGitHubContents(url, githubToken));
         const allSubfoldersResults = await Promise.all(allSubfoldersPromises);
         
         // Combine all subfolders and filter to only include directories
@@ -45,7 +46,8 @@ async function getRandomFontFolder(): Promise<MetadataInfo> {
             const metadataResponse = await fetch(metadataUrl, {
                 headers: {
                     'User-Agent': 'trmnl-workers',
-                    'Accept': 'application/vnd.github.v3+json'
+                    'Accept': 'application/vnd.github.v3+json',
+                    ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {})
                 }
             });
             
@@ -54,14 +56,16 @@ async function getRandomFontFolder(): Promise<MetadataInfo> {
                 
                 // Fetch the actual content
                 if (metadataFile.download_url) {
-                    const contentResponse = await fetch(metadataFile.download_url);
+                    const contentResponse = await fetch(metadataFile.download_url, {
+                        headers: githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}
+                    });
                     const content = await contentResponse.text();
                     
                     // Parse the protobuf text format
                     const parsed = parseProtobufText(content);
 
                     // Get sample text
-                    const sampleText = await getSampleText(parsed);
+                    const sampleText = await getSampleText(parsed, githubToken);
                     if (sampleText) {
                         parsed.sample_text = sampleText;
                     }
@@ -69,6 +73,12 @@ async function getRandomFontFolder(): Promise<MetadataInfo> {
                     // Enrich axes with registry data
                     if (parsed.axes?.length) {
                         parsed.axes = await enrichAxesWithRegistry(parsed.axes);
+                    }
+
+                    // Get font qualities from families.csv
+                    const qualities = await getFontQualities(parsed.name);
+                    if (qualities.length > 0) {
+                        parsed.qualities = qualities;
                     }
 
                     const css = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(parsed.name)}&display=swap`;
@@ -91,9 +101,9 @@ async function getRandomFontFolder(): Promise<MetadataInfo> {
 }
 
 export default {
-    async fetch(request: Request): Promise<Response> {
+    async fetch(request: Request, env: { GITHUB_TOKEN?: string }): Promise<Response> {
         try {
-            const fontInfo = await getRandomFontFolder();
+            const fontInfo = await getRandomFontFolder(env.GITHUB_TOKEN);
             
             return new Response(JSON.stringify(fontInfo, null, 2), {
                 status: 200,

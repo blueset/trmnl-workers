@@ -5,6 +5,7 @@ import googleFonts from "./google-fonts";
 
 interface Env {
   TRMNL_WORKERS_KV: KVNamespace;
+  GITHUB_TOKEN?: string;
 }
 
 export default {
@@ -18,7 +19,7 @@ export default {
     } else if (request.method === "GET" && url.pathname === "/zi-tools") {
         return ziTools.fetch(request);
     } else if (request.method === "GET" && url.pathname === "/google-fonts") {
-        return googleFonts.fetch(request);
+        return googleFonts.fetch(request, env);
     }
 
     return new Response("Not Found", { status: 404 });

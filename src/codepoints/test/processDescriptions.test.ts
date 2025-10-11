@@ -229,7 +229,7 @@ const cp316F = metaWith(desc316F, {
 });
 const cp65BB = metaWith(desc65BB, null);
 
-import { processDescriptions } from "../src/utils";
+import { processDescriptions } from "../utils";
 
 const titles = (ds: { title: string }[]) => ds.map((d) => d.title);
 

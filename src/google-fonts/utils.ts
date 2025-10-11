@@ -14,7 +14,20 @@ export interface MetadataInfo {
     css: string;
 }
 
-export async function fetchAndParseTextproto(path: string): Promise<Record<string, any> | null> {
+export function getGitHubHeaders(token?: string): HeadersInit {
+    const headers: HeadersInit = {
+        'User-Agent': 'trmnl-workers',
+        'Accept': 'application/vnd.github.v3+json'
+    };
+    
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+}
+
+export async function fetchAndParseTextproto(path: string, githubToken?: string): Promise<Record<string, any> | null> {
     // Check cache first
     if (textprotoCache.has(path)) {
         return textprotoCache.get(path)!;
@@ -22,7 +35,9 @@ export async function fetchAndParseTextproto(path: string): Promise<Record<strin
     
     try {
         const url = `https://raw.githubusercontent.com/google/fonts/main/${path}`;
-        const response = await fetch(url);
+        const response = await fetch(url, {
+            headers: githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}
+        });
         
         if (!response.ok) {
             textprotoCache.set(path, null);
@@ -39,7 +54,7 @@ export async function fetchAndParseTextproto(path: string): Promise<Record<strin
     }
 }
 
-export async function getSampleText(metadata: Record<string, any>): Promise<string | undefined> {
+export async function getSampleText(metadata: Record<string, any>, githubToken?: string): Promise<string | undefined> {
     // If sample_text already exists, return it
     if (metadata.sample_text) {
         return metadata.sample_text;
@@ -47,7 +62,7 @@ export async function getSampleText(metadata: Record<string, any>): Promise<stri
     
     // Try primary_language
     if (metadata.primary_language) {
-        const langData = await fetchAndParseTextproto(`lang/Lib/gflanguages/data/languages/${metadata.primary_language}.textproto`);
+        const langData = await fetchAndParseTextproto(`lang/Lib/gflanguages/data/languages/${metadata.primary_language}.textproto`, githubToken);
         if (langData?.sample_text) {
             return langData.sample_text;
         }
@@ -61,10 +76,7 @@ export async function getSampleText(metadata: Record<string, any>): Promise<stri
             if (!languageDirectoryCache) {
                 // Step 1: Get the root tree object ID
                 const repoResponse = await fetch('https://api.github.com/repos/google/fonts', {
-                    headers: {
-                        'User-Agent': 'trmnl-workers',
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
+                    headers: getGitHubHeaders(githubToken)
                 });
                 
                 if (repoResponse.ok) {
@@ -73,10 +85,7 @@ export async function getSampleText(metadata: Record<string, any>): Promise<stri
                     
                     // Get the commit to find the tree SHA
                     const commitResponse = await fetch(`https://api.github.com/repos/google/fonts/commits/${defaultBranch}`, {
-                        headers: {
-                            'User-Agent': 'trmnl-workers',
-                            'Accept': 'application/vnd.github.v3+json'
-                        }
+                        headers: getGitHubHeaders(githubToken)
                     });
                     
                     if (commitResponse.ok) {
@@ -85,10 +94,7 @@ export async function getSampleText(metadata: Record<string, any>): Promise<stri
                         
                         // Step 2: Get file list using tree API
                         const treeResponse = await fetch(`https://api.github.com/repos/google/fonts/git/trees/${treeSha}?recursive=1`, {
-                            headers: {
-                                'User-Agent': 'trmnl-workers',
-                                'Accept': 'application/vnd.github.v3+json'
-                            }
+                            headers: getGitHubHeaders(githubToken)
                         });
                         
                         if (treeResponse.ok) {
@@ -119,7 +125,7 @@ export async function getSampleText(metadata: Record<string, any>): Promise<stri
                 // console.log('Matching language files:', matchingFiles);
                 // Try each matching file until we find one with sample_text
                 for (const file of matchingFiles) {
-                    const langData = await fetchAndParseTextproto(`lang/Lib/gflanguages/data/languages/${file.name}`);
+                    const langData = await fetchAndParseTextproto(`lang/Lib/gflanguages/data/languages/${file.name}`, githubToken);
                     // console.log('Checked language file:', file.name, langData);
                     if (langData?.sample_text) {
                         metadata.primary_language = file.name.replace('.textproto', '');
@@ -133,26 +139,23 @@ export async function getSampleText(metadata: Record<string, any>): Promise<stri
     }
     
     // Fallback to en_Latn
-    const fallbackData = await fetchAndParseTextproto('lang/Lib/gflanguages/data/languages/en_Latn.textproto');
+    const fallbackData = await fetchAndParseTextproto('lang/Lib/gflanguages/data/languages/en_Latn.textproto', githubToken);
     metadata.primary_language = 'en_Latn';
     return fallbackData?.sample_text;
 }
 
-export async function fetchGitHubContents(url: string): Promise<GitHubContent[]> {
+export async function fetchGitHubContents(url: string, githubToken?: string): Promise<GitHubContent[]> {
     // Check cache first
     if (githubContentsCache.has(url)) {
         return githubContentsCache.get(url)!;
     }
     
     const response = await fetch(url, {
-        headers: {
-            'User-Agent': 'trmnl-workers',
-            'Accept': 'application/vnd.github.v3+json'
-        }
+        headers: getGitHubHeaders(githubToken)
     });
     
     if (!response.ok) {
-        throw new Error(`GitHub API error: ${response.status}, ${response.statusText}, ${await response.text()}`);
+        throw new Error(`GitHub API error: ${response.status}, ${response.statusText}, ${await response.text()}. ${Array.from(response.headers.entries()).map(([key, value]) => `${key}: ${value}`).join(', ')}`);
     }
     
     const contents: GitHubContent[] = await response.json();
@@ -172,6 +175,7 @@ let axisRegistryCache: AxisRegistryEntry[] | null = null;
 let languageDirectoryCache: GitHubContent[] | null = null;
 let textprotoCache: Map<string, Record<string, any> | null> = new Map();
 let githubContentsCache: Map<string, GitHubContent[]> = new Map();
+let familiesCsvCache: string | null = null;
 
 export async function getAxisRegistry(): Promise<AxisRegistryEntry[]> {
     if (axisRegistryCache) {
@@ -208,4 +212,57 @@ export async function enrichAxesWithRegistry(axes: any[]): Promise<any[]> {
         }
         return axis;
     });
+}
+
+export async function getFamiliesCsv(): Promise<string> {
+    if (familiesCsvCache) {
+        return familiesCsvCache;
+    }
+    
+    try {
+        const response = await fetch('https://raw.githubusercontent.com/google/fonts/refs/heads/main/tags/all/families.csv');
+        if (!response.ok) {
+            throw new Error(`Failed to fetch families.csv: ${response.status}`);
+        }
+        familiesCsvCache = await response.text();
+        return familiesCsvCache!;
+    } catch (error) {
+        console.error('Error fetching families.csv:', error);
+        return '';
+    }
+}
+
+export async function getFontQualities(fontName: string): Promise<Array<{type: string, quality: string, score: number}>> {
+    const csv = await getFamiliesCsv();
+    if (!csv) {
+        return [];
+    }
+    
+    const lines = csv.split('\n');
+    const qualities: Array<{type: string, quality: string, score: number}> = [];
+    
+    for (const line of lines) {
+        // Skip empty lines
+        if (!line.trim()) continue;
+        
+        // Simple CSV parsing (assuming no commas in fields)
+        const cols = line.split(',');
+        
+        // Check if col[0] matches the font name
+        if (cols[0] && cols[0].trim() === fontName) {
+            // col[2] should be in format like "type/quality"
+            if (cols[2] && cols[3]) {
+                const pathParts = cols[2].trim().split('/');
+                if (pathParts.length >= 3) {
+                    qualities.push({
+                        type: pathParts[1],
+                        quality: pathParts[2],
+                        score: parseFloat(cols[3].trim())
+                    });
+                }
+            }
+        }
+    }
+    
+    return qualities;
 }
