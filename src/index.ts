@@ -18,9 +18,9 @@ export default {
         return mdn.fetch(request);
     } else if (request.method === "GET" && url.pathname === "/zi-tools") {
         return ziTools.fetch(request);
-    } else if (request.method === "GET" && url.pathname === "/google-fonts") {
+    } /* else if (request.method === "GET" && url.pathname === "/google-fonts") {
         return googleFonts.fetch(request, env);
-    }
+    } */
 
     return new Response("Not Found", { status: 404 });
   },

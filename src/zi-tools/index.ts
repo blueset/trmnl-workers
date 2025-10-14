@@ -1,8 +1,13 @@
 export default {
   async fetch(request: Request): Promise<Response> {
     try {
+      let suffix = "";
+      if (new URL(request.url).searchParams.has("rare")) {
+        suffix = "?rare";
+      }
+
       // Step 1: fetch random zis (string[])
-      const zisResp = await fetch("https://zi.tools/api/random/");
+      const zisResp = await fetch("https://zi.tools/api/random/" + suffix);
       if (!zisResp.ok) {
         return new Response(
           JSON.stringify({ error: `Upstream random endpoint failed: ${zisResp.status}` }, null, 2),
