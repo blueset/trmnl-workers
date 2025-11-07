@@ -2,6 +2,7 @@ import codepoints from "./codepoints";
 import mdn from "./mdn";
 import ziTools from "./zi-tools";
 import googleFonts from "./google-fonts";
+import tatoeba from "./tatoeba";
 
 interface Env {
   TRMNL_WORKERS_KV: KVNamespace;
@@ -18,6 +19,8 @@ export default {
         return mdn.fetch(request);
     } else if (request.method === "GET" && url.pathname === "/zi-tools") {
         return ziTools.fetch(request);
+    } else if (request.method === "GET" && url.pathname === "/tatoeba") {
+        return tatoeba.fetch(request);
     } /* else if (request.method === "GET" && url.pathname === "/google-fonts") {
         return googleFonts.fetch(request, env);
     } */

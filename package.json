@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.8.11",
+    "bcp-47-normalize": "^2.3.0",
     "parse5": "^8.0.0"
   }
 }
