@@ -74,7 +74,7 @@ export function parseTitle(title: string) {
     // DO NOT extract parentheticals or w/ patterns - those are part of the product name!
     const trailingNotePatterns = [
         // Free shipping variants
-        /\s+\+\s+Free\s+(?:Shipping|S\/H|S&H|Store\s+Pickup)(?:\s+(?:w\/|on)(?:\s+Prime\s+or\s+on)?\s+[^$+&]+)?$/i,
+        /\s+\+\s+Free\s+(?:Shipping|S\/H|S&H|Store\s+Pickup)(?:\s+(?:w\/|on)(?:(?:Amazon\s+)?\s+Prime(?:\s+or\s+on)?)?\s+[^$+&]+)?$/i,
         // & More (sometimes with shipping)
         /\s+&\s+More(?:\s+\+\s+Free\s+[^$]+)?$/i,
         // Subscribe & Save
