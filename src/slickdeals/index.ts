@@ -84,7 +84,7 @@ export function parseTitle(title: string) {
         /\s+w\/\s+Amazon\s+Prime$/i,
         /\s+w\/\s+Text\s+Signup$/i,
         // Shipping costs (not free)
-        /\s+\+\s+\$[\d.]+\s+Shipping$/i,
+        /\s+\+\s+(?:\$[\d.]+\s+)?Shipping$/i,
         // Shipping thresholds
         /\s+\+\s+Free\s+S\/H\s+(?:Orders|on)\s+\$[\d+]+$/i,
     ];
