@@ -1,7 +1,7 @@
 import { DOMParser } from '@xmldom/xmldom';
 
 export default {
-    async fetch(request: Request): Promise<Response> {
+    async fetch(request: Request, env: { AI: Ai }): Promise<Response> {
         const url = new URL(request.url);
         const mode = url.searchParams.get('mode') || 'popdeals';
         
@@ -39,15 +39,15 @@ export default {
             cleanedHtml = cleanedHtml.replace(/Thumb Score:\s*[+-]?\d+/gi, "");
             
             // Parse title
-            const { name, price, note } = parseTitle(title);
+            // const { name, price, note } = parseTitle(title);
             
             // Content text (strip tags)
             const contentText = cleanedHtml.replace(/<[^>]+>/g, "").trim();
             
             result.push({
-                name,
-                price: price || undefined,
-                note: note || undefined,
+                name: title,
+                price: undefined as string | undefined,
+                note: undefined as string | undefined,
                 image,
                 thumbScore,
                 content: {
@@ -56,12 +56,145 @@ export default {
                 }
             });
         }
+
+        const aiParsedTitles = await parseTitleAI(result.map(r => r.name), env.AI);
+
+        // Merge AI parsed titles into result
+        for (let i = 0; i < result.length; i++) {
+            result[i].name = aiParsedTitles[i].name;
+            result[i].price = aiParsedTitles[i].price || undefined;
+            result[i].note = aiParsedTitles[i].note || undefined;
+        }
         
         return new Response(JSON.stringify(result), {
             headers: { "content-type": "application/json" }
         });
     }
 }
+
+const prompt = `You are a data extraction assistant. Your task is to parse a list of deal title strings into structured JSON objects containing \`name\`, \`price\`, and \`note\`.
+
+### Extraction Rules:
+1.  **Note**: Extract trailing information starting with \`+\`, \`&\`, or \`w/\` (e.g., \`+ Free Shipping\`, \`& More\`, \`w/ Subscribe & Save\`). Also include specific parenthetical notes at the end like \`(Email Delivery)\` or \`(In-Store Only)\` if they appear after the price.
+2.  **Price**: Identify the price information immediately preceding the notes. Common formats include:
+    *   Simple: \`$28\`, \`Free\`
+    *   Range/Start: \`from $3.80\`, \`$1300 or Less\`
+    *   Quantity: \`2 for $6\`, \`1 Pack for $14\`
+    *   Subscription: \`$1/month\`, \`$225/yr\`
+    *   Discount: \`50% Off\`, \`20% Off\`
+    *   Complex: \`$750 + 20% Back in PayPal Rewards\`
+    *   Special: \`(See Official Rules)\`
+    *   **Important**: If multiple prices appear, usually the last one before the notes is the main price, and earlier ones are part of the product name (e.g., "Game A $20, Game B $10" -> Price is "$10").
+3.  **Name**: Everything before the extracted price is the product name.
+
+### Examples:
+
+**Input:**
+\`\`\`json
+[
+  "adidas Men's Lite Racer Adapt 7.0 Shoes (3 colors) $28",
+  "Sony WH-1000XM4 Noise Cancelling Wireless Over-the-Ear Headphones (3 Colors) $160 + Free Shipping",
+  "11-Ounce Tree Hut Serum Infused Hand Wash (Various Scents) from $3.80 w/ Subscribe & Save",
+  "Hasbro Winning Moves Scrabble Slam Card Game 2 for $6",
+  "Select PayPal Accts: 512GB Galaxy S25 Ultra 5G Unlocked Smartphone (Titanium Gray) $750 + 20% Back in PayPal Rewards + Free Shipping",
+  "Warhammer: Vermintide 2 (PC Digital Download) Free",
+  "Columbia Sportswear: Select Styles on Men's, Women's, & Kids' Apparel & Shoes 50% Off + Free Shipping",
+  "12-Month Xbox Game Pass Core Membership $60 (Email Delivery)",
+  "Slickdeals Daily Draw Giveaway – Enter Now for a Chance to Win! (See Official Rules)",
+  "PC Digital Games: Shin Megami Tensei V: Vengeance $20.10, Judgment $10 & More",
+  "Costco Members: 5-Count PUMA Men's Boxer Briefs: 5 Packs for $50 or 1 Pack for $14 & More + Free Shipping"
+]
+\`\`\`
+
+**Output:**
+\`\`\`json
+[
+  {
+    "name": "adidas Men's Lite Racer Adapt 7.0 Shoes (3 colors)",
+    "price": "$28",
+    "note": ""
+  },
+  {
+    "name": "Sony WH-1000XM4 Noise Cancelling Wireless Over-the-Ear Headphones (3 Colors)",
+    "price": "$160",
+    "note": "+ Free Shipping"
+  },
+  {
+    "name": "11-Ounce Tree Hut Serum Infused Hand Wash (Various Scents)",
+    "price": "from $3.80",
+    "note": "w/ Subscribe & Save"
+  },
+  {
+    "name": "Hasbro Winning Moves Scrabble Slam Card Game",
+    "price": "2 for $6",
+    "note": ""
+  },
+  {
+    "name": "Select PayPal Accts: 512GB Galaxy S25 Ultra 5G Unlocked Smartphone (Titanium Gray)",
+    "price": "$750 + 20% Back in PayPal Rewards",
+    "note": "+ Free Shipping"
+  },
+  {
+    "name": "Warhammer: Vermintide 2 (PC Digital Download)",
+    "price": "Free",
+    "note": ""
+  },
+  {
+    "name": "Columbia Sportswear: Select Styles on Men's, Women's, & Kids' Apparel & Shoes",
+    "price": "50% Off",
+    "note": "+ Free Shipping"
+  },
+  {
+    "name": "12-Month Xbox Game Pass Core Membership",
+    "price": "$60",
+    "note": "(Email Delivery)"
+  },
+  {
+    "name": "Slickdeals Daily Draw Giveaway – Enter Now for a Chance to Win!",
+    "price": "(See Official Rules)",
+    "note": ""
+  },
+  {
+    "name": "PC Digital Games: Shin Megami Tensei V: Vengeance $20.10, Judgment",
+    "price": "$10",
+    "note": "& More"
+  },
+  {
+    "name": "Costco Members: 5-Count PUMA Men's Boxer Briefs: 5 Packs for $50 or",
+    "price": "1 Pack for $14",
+    "note": "& More + Free Shipping"
+  }
+]
+\`\`\`
+
+### Task:
+Parse the following JSON input array into the corresponding JSON output array.`;
+
+async function parseTitleAI(titles: string[], ai: Ai) {
+    const result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fast" as "@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+        messages: [
+            { role: "system", content: prompt },
+            { role: "user", content: JSON.stringify(titles, null, 2) }
+        ],
+        response_format: {
+            type: "json_schema",
+            json_schema: {
+                type: "array",
+                items: {
+                    type: "object",
+                    properties: {
+                        name: { type: "string" },
+                        price: { type: "string" },
+                        note: { type: "string" }
+                    },
+                    required: ["name", "price", "note"]
+                }
+            }
+        }
+    });
+    return result.response as unknown as Array<{ name: string; price: string; note: string }>;
+}
+
 
 export function parseTitle(title: string) {
     let name = title;
