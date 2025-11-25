@@ -118,9 +118,10 @@ export default {
                 `https://zi.tools/api/zi/${id}_font_${page}`
               );
               if (!pageResp.ok) {
-                throw new Error(
+                console.error(
                   `Upstream font page ${page} failed: ${pageResp.status}`
                 );
+                return {};
               }
               const pageJson: unknown = await pageResp.json();
               return pageJson as { font?: Record<string, string> };
