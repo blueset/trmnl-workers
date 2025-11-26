@@ -47,7 +47,12 @@ interface Env {
 async function getCache(kv: KVNamespace): Promise<CacheData> {
     const data = await kv.get(CACHE_KV_KEY);
     if (data) {
-        return JSON.parse(data) as CacheData;
+        try {
+            return JSON.parse(data) as CacheData;
+        } catch {
+            // If cache data is corrupted, return empty cache
+            return { responseCache: {}, titleCache: {} };
+        }
     }
     return { responseCache: {}, titleCache: {} };
 }
@@ -173,7 +178,10 @@ export default {
                     titlesToParseWithAI.push(title);
                     titleIndexMap.set(title, []);
                 }
-                titleIndexMap.get(title)!.push(i);
+                const indices = titleIndexMap.get(title);
+                if (indices) {
+                    indices.push(i);
+                }
             }
         }
         
