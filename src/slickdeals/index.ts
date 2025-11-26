@@ -14,8 +14,8 @@ export default {
         const items = doc.getElementsByTagName("item");
         
         const result = [];
-        
-        for (let i = 0; i < items.length; i++) {
+
+        for (let i = 0; i < Math.min(15, items.length); i++) {
             const item = items[i];
             const title = item.getElementsByTagName("title")[0]?.textContent || "";
             
@@ -171,7 +171,7 @@ const prompt = `You are a data extraction assistant. Your task is to parse a lis
 Parse the following JSON input array into the corresponding JSON output array.`;
 
 async function parseTitleAI(titles: string[], ai: Ai) {
-    const result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fast" as "@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+    const result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fast" as "@cf/meta/llama-3.1-8b-instruct-fp8", {
         messages: [
             { role: "system", content: prompt },
             { role: "user", content: JSON.stringify(titles, null, 2) }
