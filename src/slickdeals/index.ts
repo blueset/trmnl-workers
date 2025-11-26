@@ -1,9 +1,113 @@
 import { DOMParser } from '@xmldom/xmldom';
 
+// TTL Configuration (in milliseconds)
+const RESPONSE_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const TITLE_CACHE_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
+
+// KV key for the cache
+const CACHE_KV_KEY = "slickdeals_cache";
+
+// Cache structure stored in KV
+interface CacheData {
+    // Response cache: keyed by mode value
+    responseCache: Record<string, {
+        data: DealResult[];
+        timestamp: number;
+    }>;
+    // Title cache: keyed by input title string
+    titleCache: Record<string, {
+        parsed: ParsedTitle;
+        timestamp: number;
+    }>;
+}
+
+interface DealResult {
+    name: string;
+    price: string | undefined;
+    note: string | undefined;
+    image: string;
+    thumbScore: string | undefined;
+    content: {
+        html: string;
+        text: string;
+    };
+}
+
+interface ParsedTitle {
+    name: string;
+    price: string;
+    note: string;
+}
+
+interface Env {
+    AI: Ai;
+    TRMNL_WORKERS_KV: KVNamespace;
+}
+
+async function getCache(kv: KVNamespace): Promise<CacheData> {
+    const data = await kv.get(CACHE_KV_KEY);
+    if (data) {
+        try {
+            return JSON.parse(data) as CacheData;
+        } catch {
+            // If cache data is corrupted, return empty cache
+            return { responseCache: {}, titleCache: {} };
+        }
+    }
+    return { responseCache: {}, titleCache: {} };
+}
+
+async function setCache(kv: KVNamespace, cache: CacheData): Promise<void> {
+    await kv.put(CACHE_KV_KEY, JSON.stringify(cache));
+}
+
+function isResponseCacheValid(timestamp: number): boolean {
+    return Date.now() - timestamp < RESPONSE_CACHE_TTL_MS;
+}
+
+function isTitleCacheValid(timestamp: number): boolean {
+    return Date.now() - timestamp < TITLE_CACHE_TTL_MS;
+}
+
+// Clean expired items only when we need to write new values
+function cleanExpiredItems(cache: CacheData): void {
+    const now = Date.now();
+    
+    // Clean expired response cache entries
+    for (const mode of Object.keys(cache.responseCache)) {
+        if (now - cache.responseCache[mode].timestamp >= RESPONSE_CACHE_TTL_MS) {
+            delete cache.responseCache[mode];
+        }
+    }
+    
+    // Clean expired title cache entries
+    for (const title of Object.keys(cache.titleCache)) {
+        if (now - cache.titleCache[title].timestamp >= TITLE_CACHE_TTL_MS) {
+            delete cache.titleCache[title];
+        }
+    }
+}
+
 export default {
-    async fetch(request: Request, env: { AI: Ai }): Promise<Response> {
+    async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);
         const mode = url.searchParams.get('mode') || 'popdeals';
+        const bypassResponseCache = url.searchParams.get('bypass_response_cache') === 'true';
+        const bypassTitleCache = url.searchParams.get('bypass_title_cache') === 'true';
+        
+        // Load cache from KV
+        const cache = await getCache(env.TRMNL_WORKERS_KV);
+        
+        // Check if we have a valid cached response for this mode
+        const responseCacheEntry = cache.responseCache[mode];
+        if (!bypassResponseCache && responseCacheEntry && isResponseCacheValid(responseCacheEntry.timestamp)) {
+            return new Response(JSON.stringify(responseCacheEntry.data), {
+                headers: { 
+                    "content-type": "application/json",
+                    "x-cache": "HIT"
+                }
+            });
+        }
         
         const feedUrl = `https://slickdeals.net/newsearch.php?mode=${mode}&searcharea=deals&searchin=first&rss=1`;
         const response = await fetch(feedUrl);
@@ -13,11 +117,13 @@ export default {
         const doc = parser.parseFromString(text, "text/xml");
         const items = doc.getElementsByTagName("item");
         
-        const result = [];
+        const result: DealResult[] = [];
+        const originalTitles: string[] = [];
 
         for (let i = 0; i < Math.min(15, items.length); i++) {
             const item = items[i];
             const title = item.getElementsByTagName("title")[0]?.textContent || "";
+            originalTitles.push(title);
             
             // Use getElementsByTagNameNS for content:encoded if possible, otherwise fallback to tag name search
             let contentEncoded = "";
@@ -38,16 +144,13 @@ export default {
             let cleanedHtml = contentEncoded.replace(/<img[^>]*>/gi, "");
             cleanedHtml = cleanedHtml.replace(/Thumb Score:\s*[+-]?\d+/gi, "");
             
-            // Parse title
-            // const { name, price, note } = parseTitle(title);
-            
             // Content text (strip tags)
             const contentText = cleanedHtml.replace(/<[^>]+>/g, "").trim();
             
             result.push({
                 name: title,
-                price: undefined as string | undefined,
-                note: undefined as string | undefined,
+                price: undefined,
+                note: undefined,
                 image,
                 thumbScore,
                 content: {
@@ -57,17 +160,79 @@ export default {
             });
         }
 
-        const aiParsedTitles = await parseTitleAI(result.map(r => r.name), env.AI);
+        // Check title cache and determine which titles need AI parsing
+        const titlesToParseWithAI: string[] = [];
+        const titleIndexMap: Map<string, number[]> = new Map(); // Map title to result indices
+        const cachedParsedTitles: Map<string, ParsedTitle> = new Map();
+        
+        for (let i = 0; i < originalTitles.length; i++) {
+            const title = originalTitles[i];
+            const titleCacheEntry = cache.titleCache[title];
+            
+            if (!bypassTitleCache && titleCacheEntry && isTitleCacheValid(titleCacheEntry.timestamp)) {
+                // Use cached parsed title
+                cachedParsedTitles.set(title, titleCacheEntry.parsed);
+            } else {
+                // Need to parse this title with AI
+                if (!titleIndexMap.has(title)) {
+                    titlesToParseWithAI.push(title);
+                    titleIndexMap.set(title, []);
+                }
+                const indices = titleIndexMap.get(title);
+                if (indices) {
+                    indices.push(i);
+                }
+            }
+        }
+        
+        // Parse titles with AI if needed
+        let needsKVWrite = false;
+        if (titlesToParseWithAI.length > 0) {
+            const aiParsedTitles = await parseTitleAI(titlesToParseWithAI, env.AI);
+            
+            // Update title cache with new parsed titles
+            const now = Date.now();
+            for (let j = 0; j < titlesToParseWithAI.length; j++) {
+                const title = titlesToParseWithAI[j];
+                const parsed = aiParsedTitles[j];
+                cache.titleCache[title] = {
+                    parsed,
+                    timestamp: now
+                };
+                cachedParsedTitles.set(title, parsed);
+            }
+            needsKVWrite = true;
+        }
 
-        // Merge AI parsed titles into result
+        // Merge parsed titles into result
         for (let i = 0; i < result.length; i++) {
-            result[i].name = aiParsedTitles[i].name;
-            result[i].price = aiParsedTitles[i].price || undefined;
-            result[i].note = aiParsedTitles[i].note || undefined;
+            const title = originalTitles[i];
+            const parsed = cachedParsedTitles.get(title);
+            if (parsed) {
+                result[i].name = parsed.name;
+                result[i].price = parsed.price || undefined;
+                result[i].note = parsed.note || undefined;
+            }
+        }
+        
+        // Update response cache
+        cache.responseCache[mode] = {
+            data: result,
+            timestamp: Date.now()
+        };
+        needsKVWrite = true;
+        
+        // Clean expired items before writing to KV
+        if (needsKVWrite) {
+            cleanExpiredItems(cache);
+            await setCache(env.TRMNL_WORKERS_KV, cache);
         }
         
         return new Response(JSON.stringify(result), {
-            headers: { "content-type": "application/json" }
+            headers: { 
+                "content-type": "application/json",
+                "x-cache": "MISS"
+            }
         });
     }
 }
