@@ -88,6 +88,19 @@ function cleanExpiredItems(cache: CacheData): void {
     }
 }
 
+async function getFeedText(mode: string): Promise<string> {
+    try {
+        const feedUrl = `https://slickdeals.net/newsearch.php?mode=${mode}&searcharea=deals&searchin=first&rss=1`;
+        const response = await fetch(feedUrl);
+        const text = await response.text();
+        console.log(`Fetched feed for mode=${mode}, http=${response.status}, text=${text}`);
+        return text;
+    } catch (error) {
+        console.error("Error fetching feed:", error);
+        return "";
+    }
+}
+
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);
@@ -109,9 +122,7 @@ export default {
             });
         }
         
-        const feedUrl = `https://slickdeals.net/newsearch.php?mode=${mode}&searcharea=deals&searchin=first&rss=1`;
-        const response = await fetch(feedUrl);
-        const text = await response.text();
+        const text = await getFeedText(mode);
         
         const parser = new DOMParser();
         const doc = parser.parseFromString(text, "text/xml");
