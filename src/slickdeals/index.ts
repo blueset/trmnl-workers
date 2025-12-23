@@ -1,7 +1,7 @@
 import { DOMParser } from '@xmldom/xmldom';
 
 // TTL Configuration (in milliseconds)
-const RESPONSE_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const RESPONSE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const TITLE_CACHE_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
 
 // KV key for the cache
@@ -23,10 +23,10 @@ interface CacheData {
 
 interface DealResult {
     name: string;
-    price: string | undefined;
-    note: string | undefined;
-    image: string;
-    thumbScore: string | undefined;
+    price?: string;
+    note?: string;
+    image?: string;
+    thumbScore?: string;
     content: {
         html: string;
         text: string;
@@ -42,6 +42,22 @@ interface ParsedTitle {
 interface Env {
     AI: Ai;
     TRMNL_WORKERS_KV: KVNamespace;
+}
+
+function shortDurationFromNow(timestamp: number): string {
+    const diffMs = Date.now() - timestamp;
+    const diffMinutes = Math.floor(diffMs / (60 * 1000));
+    if (diffMinutes < 1) return "just now";
+    const format = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+    if (diffMinutes < 60) {
+        return format.format(-diffMinutes, 'minute');
+    } else if (diffMinutes < 1440) {
+        const hours = Math.floor(diffMinutes / 60);
+        return format.format(-hours, 'hour');
+    } else {
+        const days = Math.floor(diffMinutes / 1440);
+        return format.format(-days, 'day');
+    }
 }
 
 async function getCache(kv: KVNamespace): Promise<CacheData> {
@@ -93,7 +109,10 @@ async function getFeedText(mode: string): Promise<string> {
         const feedUrl = `https://slickdeals.net/newsearch.php?mode=${mode}&searcharea=deals&searchin=first&rss=1`;
         const response = await fetch(feedUrl);
         const text = await response.text();
-        console.log(`Fetched feed for mode=${mode}, http=${response.status}, text=${text}`);
+        // console.log(`Fetched feed for mode=${mode}, http=${response.status}, text=${text}`);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch feed: ${response.status} ${response.statusText}, text=${text}`);
+        }
         return text;
     } catch (error) {
         console.error("Error fetching feed:", error);
@@ -123,6 +142,24 @@ export default {
         }
         
         const text = await getFeedText(mode);
+
+        if (!text) {
+            return new Response(JSON.stringify([...(
+                {
+                    name: `Data from ${shortDurationFromNow(responseCacheEntry.timestamp)}`,
+                    content: {
+                        html: "<p>Error fetching data from Slickdeals.</p>",
+                        text: "Error fetching data from Slickdeals."
+                    },
+                } as DealResult,
+                responseCacheEntry?.data || [])
+            ]), {
+                headers: { 
+                    "content-type": "application/json",
+                    "x-cache": "ERROR_FALLBACK"
+                }
+            });
+        }
         
         const parser = new DOMParser();
         const doc = parser.parseFromString(text, "text/xml");
