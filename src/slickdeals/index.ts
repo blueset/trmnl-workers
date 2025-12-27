@@ -23,6 +23,7 @@ interface CacheData {
 
 interface DealResult {
     name: string;
+    link: string;
     price?: string;
     note?: string;
     image?: string;
@@ -194,6 +195,8 @@ export default {
             
             // Content text (strip tags)
             const contentText = cleanedHtml.replace(/<[^>]+>/g, "").trim();
+
+            const link = item.getElementsByTagName("link")[0]?.textContent || "";
             
             result.push({
                 name: title,
@@ -201,6 +204,7 @@ export default {
                 note: undefined,
                 image,
                 thumbScore,
+                link,
                 content: {
                     html: cleanedHtml,
                     text: contentText
