@@ -467,7 +467,7 @@ export default {
               let routeShortName = route.routeShortName;
               let routeShape: "rectangle" | "circle" = "rectangle";
               
-              const match = routeShortName.match(/^(.+?)(\sLine)?$/i);
+              const match = routeShortName.match(/^(.+?)(\sLine)$/i);
               if (match) {
                 routeShortName = match[1];
                 routeShape = "circle";
