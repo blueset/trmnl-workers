@@ -84,8 +84,8 @@ export function getCombinedDirectionShorthand(
   // Check for opposite pairs
   if (set.has("↑") && set.has("↓")) return "↕"; // N-S
   if (set.has("→") && set.has("←")) return "↔"; // E-W
-  if (set.has("↗") && set.has("↙")) return "⤡"; // NE-SW
-  if (set.has("↖") && set.has("↘")) return "⤢"; // NW-SE
+  if (set.has("↗") && set.has("↙")) return "⤢"; // NE-SW
+  if (set.has("↖") && set.has("↘")) return "⤡"; // NW-SE
 
   // Not a valid opposite pair, return first direction
   return directions[0];
