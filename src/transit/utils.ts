@@ -128,8 +128,18 @@ export function formatTime(
   hourCycle: "h12" | "h23"
 ): { hour: string; minute: string } {
   const date = new Date(timestampMs);
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
+  
+  // Get hours and minutes in America/Los_Angeles timezone
+  const timeFormatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  });
+  
+  const parts = timeFormatter.formatToParts(date);
+  const hours = parseInt(parts.find(p => p.type === "hour")?.value || "0");
+  const minutes = parseInt(parts.find(p => p.type === "minute")?.value || "0");
 
   if (hourCycle === "h12") {
     const period = hours >= 12 ? "p" : "a";
