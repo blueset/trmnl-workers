@@ -1,9 +1,9 @@
 import codepoints from "./codepoints";
 import mdn from "./mdn";
 import ziTools from "./zi-tools";
-import googleFonts from "./google-fonts";
 import tatoeba from "./tatoeba";
 import slickdeals from "./slickdeals";
+import transit from "./transit";
 
 interface Env {
   TRMNL_WORKERS_KV: KVNamespace;
@@ -25,6 +25,8 @@ export default {
         return tatoeba.fetch(request);
     } else if (request.method === "GET" && url.pathname === "/slickdeals") {
         return slickdeals.fetch(request, env);
+    } else if (request.method === "GET" && url.pathname === "/transit") {
+        return transit.fetch(request);
     }
 
     return new Response("Not Found", { status: 404 });
