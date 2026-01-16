@@ -473,6 +473,14 @@ export default {
                 routeShape = "circle";
               }
 
+              if (!routeShortName.match(/^[0-9]+$/)) {
+                // Use initials
+                routeShortName = routeShortName
+                  .split(/\s+/)
+                  .map((word) => word.charAt(0).toUpperCase())
+                  .join("");
+              }
+
               // Calculate luminance
               const routeColor = route.routeColor
                 ? `#${route.routeColor}`
