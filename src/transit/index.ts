@@ -271,7 +271,7 @@ export default {
             stopLon: stop.lon,
             tripId: arrival.tripId,
             routeId: arrival.routeId,
-            routeShortName: route.shortName || arrival.routeShortName || "",
+            routeShortName: route.shortName || arrival.routeShortName || route.longName || arrival.routeLongName || "",
             routeLongName: route.longName || arrival.routeLongName || "",
             routeColor: route.color,
             routeTextColor: route.textColor,
