@@ -130,6 +130,10 @@ export default {
 
       // Optional parameters
       const stopIdsParam = url.searchParams.get("stopIds");
+      const routeIdsParam = url.searchParams.get("routeIds");
+      const routeIdsFilter = routeIdsParam
+        ? new Set(routeIdsParam.split(",").map((id) => id.trim()))
+        : null;
       const radiusStr = url.searchParams.get("radius");
       const radius = radiusStr ? parseInt(radiusStr, 10) : 500;
       const hourCycle =
@@ -248,6 +252,9 @@ export default {
         for (const arrival of arrivals) {
           const route = routeMap.get(arrival.routeId);
           if (!route) continue;
+
+          // Skip if routeIds filter is specified and this route is not in the filter
+          if (routeIdsFilter && !routeIdsFilter.has(arrival.routeId)) continue;
 
           const arrivalTimeMs =
             arrival.predictedArrivalTime || arrival.scheduledArrivalTime;

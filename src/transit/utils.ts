@@ -151,7 +151,7 @@ export function formatTime(
   }
 
   return {
-    hour: `${hours}:`,
+    hour: `${hours.toString().padStart(2, "0")}:`,
     minute: minutes.toString().padStart(2, "0"),
   };
 }
