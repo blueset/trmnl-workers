@@ -145,7 +145,7 @@ export default {
         const text = await getFeedText(mode);
 
         if (!text) {
-            return new Response(JSON.stringify([...(
+            return new Response(JSON.stringify([
                 {
                     name: `Data from ${shortDurationFromNow(responseCacheEntry.timestamp)}`,
                     content: {
@@ -153,7 +153,7 @@ export default {
                         text: "Error fetching data from Slickdeals."
                     },
                 } as DealResult,
-                responseCacheEntry?.data || [])
+                ...(responseCacheEntry?.data || [])
             ]), {
                 headers: { 
                     "content-type": "application/json",
@@ -242,18 +242,25 @@ export default {
         if (titlesToParseWithAI.length > 0) {
             const aiParsedTitles = await parseTitleAI(titlesToParseWithAI, env.AI);
             
-            // Update title cache with new parsed titles
-            const now = Date.now();
-            for (let j = 0; j < titlesToParseWithAI.length; j++) {
-                const title = titlesToParseWithAI[j];
-                const parsed = aiParsedTitles[j];
-                cache.titleCache[title] = {
-                    parsed,
-                    timestamp: now
-                };
-                cachedParsedTitles.set(title, parsed);
+            if (aiParsedTitles) {
+                // AI succeeded - cache the parsed titles
+                const now = Date.now();
+                for (let j = 0; j < titlesToParseWithAI.length; j++) {
+                    const title = titlesToParseWithAI[j];
+                    const parsed = aiParsedTitles[j];
+                    cache.titleCache[title] = {
+                        parsed,
+                        timestamp: now
+                    };
+                    cachedParsedTitles.set(title, parsed);
+                }
+                needsKVWrite = true;
+            } else {
+                // AI failed - use regex fallback without caching
+                for (const title of titlesToParseWithAI) {
+                    cachedParsedTitles.set(title, parseTitle(title));
+                }
             }
-            needsKVWrite = true;
         }
 
         // Merge parsed titles into result
@@ -387,29 +394,37 @@ const prompt = `You are a data extraction assistant. Your task is to parse a lis
 ### Task:
 Parse the following JSON input array into the corresponding JSON output array.`;
 
-async function parseTitleAI(titles: string[], ai: Ai) {
-    const result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fast" as "@cf/meta/llama-3.1-8b-instruct-fp8", {
-        messages: [
-            { role: "system", content: prompt },
-            { role: "user", content: JSON.stringify(titles, null, 2) }
-        ],
-        response_format: {
-            type: "json_schema",
-            json_schema: {
-                type: "array",
-                items: {
-                    type: "object",
-                    properties: {
-                        name: { type: "string" },
-                        price: { type: "string" },
-                        note: { type: "string" }
-                    },
-                    required: ["name", "price", "note"]
+async function parseTitleAI(titles: string[], ai: Ai): Promise<Array<{ name: string; price: string; note: string }> | null> {
+    try {
+        const result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fast" as "@cf/meta/llama-3.1-8b-instruct-fp8", {
+            messages: [
+                { role: "system", content: prompt },
+                { role: "user", content: JSON.stringify(titles, null, 2) }
+            ],
+            response_format: {
+                type: "json_schema",
+                json_schema: {
+                    type: "array",
+                    items: {
+                        type: "object",
+                        properties: {
+                            name: { type: "string" },
+                            price: { type: "string" },
+                            note: { type: "string" }
+                        },
+                        required: ["name", "price", "note"]
+                    }
                 }
             }
-        }
-    });
-    return result.response as unknown as Array<{ name: string; price: string; note: string }>;
+        });
+        return result.response as unknown as Array<{ name: string; price: string; note: string }>;
+    } catch (error) {
+        // Handle "JSON Mode couldn't be met" error from Cloudflare Workers AI
+        // https://developers.cloudflare.com/workers-ai/features/json-mode/
+        // Return null to signal that AI parsing failed - caller should use regex fallback without caching
+        console.error("AI title parsing failed:", error);
+        return null;
+    }
 }
 
 
