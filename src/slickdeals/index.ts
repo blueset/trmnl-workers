@@ -112,6 +112,7 @@ async function getFeedText(mode: string): Promise<string> {
         const text = await response.text();
         // console.log(`Fetched feed for mode=${mode}, http=${response.status}, text=${text}`);
         if (!response.ok) {
+            console.error(`Failed to fetch feed: ${response.status} ${response.statusText}, text=${text}`);
             throw new Error(`Failed to fetch feed: ${response.status} ${response.statusText}, text=${text}`);
         }
         return text;
@@ -147,7 +148,7 @@ export default {
         if (!text) {
             return new Response(JSON.stringify([
                 {
-                    name: `Data from ${shortDurationFromNow(responseCacheEntry.timestamp)}`,
+                    name: responseCacheEntry?.timestamp ? `Data from ${shortDurationFromNow(responseCacheEntry.timestamp)}` : "No data available",
                     content: {
                         html: "<p>Error fetching data from Slickdeals.</p>",
                         text: "Error fetching data from Slickdeals."
