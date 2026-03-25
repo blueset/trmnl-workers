@@ -143,7 +143,14 @@ export default {
             });
         }
         
-        const text = await getFeedText(mode);
+        let text = "";
+
+        try {
+            text = await getFeedText(mode);
+        } catch (error) {
+            console.error("Error fetching feed:", error);
+            // If fetching fails, we will attempt to return stale cache data if available, otherwise an error message
+        }
 
         if (!text) {
             return new Response(JSON.stringify([
