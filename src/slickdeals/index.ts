@@ -1,7 +1,7 @@
 import { DOMParser } from '@xmldom/xmldom';
 
 // TTL Configuration (in milliseconds)
-const RESPONSE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const RESPONSE_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const TITLE_CACHE_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
 
 // KV key for the cache
@@ -143,14 +143,7 @@ export default {
             });
         }
         
-        let text = "";
-
-        try {
-            text = await getFeedText(mode);
-        } catch (error) {
-            console.error("Error fetching feed:", error);
-            // If fetching fails, we will attempt to return stale cache data if available, otherwise an error message
-        }
+        const text = await getFeedText(mode);
 
         if (!text) {
             return new Response(JSON.stringify([
