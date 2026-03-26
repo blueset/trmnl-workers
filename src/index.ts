@@ -4,6 +4,7 @@ import ziTools from "./zi-tools";
 import tatoeba from "./tatoeba";
 import slickdeals from "./slickdeals";
 import transit from "./transit";
+import uspto from "./uspto";
 
 interface Env {
   TRMNL_WORKERS_KV: KVNamespace;
@@ -12,7 +13,7 @@ interface Env {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/codepoints") {
@@ -27,6 +28,8 @@ export default {
         return slickdeals.fetch(request, env);
     } else if (request.method === "GET" && url.pathname === "/transit") {
         return transit.fetch(request);
+      } else if (request.method === "GET" && url.pathname === "/uspto") {
+        return uspto.fetch(request, env, ctx);
     }
 
     return new Response("Not Found", { status: 404 });
