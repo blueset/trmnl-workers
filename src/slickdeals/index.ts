@@ -41,7 +41,7 @@ interface ParsedTitle {
 }
 
 interface Env {
-    AI: Ai;
+    OPENROUTER_API_KEY: string;
     TRMNL_WORKERS_KV: KVNamespace;
 }
 
@@ -241,7 +241,7 @@ export default {
         // Parse titles with AI if needed
         let needsKVWrite = false;
         if (titlesToParseWithAI.length > 0) {
-            const aiParsedTitles = await parseTitleAI(titlesToParseWithAI, env.AI);
+            const aiParsedTitles = await parseTitleAI(titlesToParseWithAI, env.OPENROUTER_API_KEY);
             
             if (aiParsedTitles) {
                 // AI succeeded - cache the parsed titles
@@ -297,7 +297,7 @@ export default {
     }
 }
 
-const prompt = `You are a data extraction assistant. Your task is to parse a list of deal title strings into structured JSON objects containing \`name\`, \`price\`, and \`note\`.
+const prompt = `You are a data extraction assistant. Your task is to parse a list of deal title strings into structured JSON objects containing \`name\`, \`price\`, and \`note\`. Return a JSON object with a single key \`deals\` whose value is the array of parsed objects.
 
 ### Extraction Rules:
 1.  **Note**: Extract trailing information starting with \`+\`, \`&\`, or \`w/\` (e.g., \`+ Free Shipping\`, \`& More\`, \`w/ Subscribe & Save\`). Also include specific parenthetical notes at the end like \`(Email Delivery)\` or \`(In-Store Only)\` if they appear after the price.
@@ -333,7 +333,8 @@ const prompt = `You are a data extraction assistant. Your task is to parse a lis
 
 **Output:**
 \`\`\`json
-[
+{
+  "deals": [
   {
     "name": "adidas Men's Lite Racer Adapt 7.0 Shoes (3 colors)",
     "price": "$28",
@@ -389,40 +390,82 @@ const prompt = `You are a data extraction assistant. Your task is to parse a lis
     "price": "1 Pack for $14",
     "note": "& More + Free Shipping"
   }
-]
+  ]
+}
 \`\`\`
 
 ### Task:
-Parse the following JSON input array into the corresponding JSON output array.`;
+Parse the following JSON input array into the corresponding JSON output object.`;
 
-async function parseTitleAI(titles: string[], ai: Ai): Promise<Array<{ name: string; price: string; note: string }> | null> {
+async function parseTitleAI(titles: string[], apiKey: string): Promise<Array<{ name: string; price: string; note: string }> | null> {
     try {
-        const result = await ai.run("@cf/meta/llama-3.1-8b-instruct-fast" as "@cf/meta/llama-3.1-8b-instruct-fp8", {
-            messages: [
-                { role: "system", content: prompt },
-                { role: "user", content: JSON.stringify(titles, null, 2) }
-            ],
-            response_format: {
-                type: "json_schema",
-                json_schema: {
-                    type: "array",
-                    items: {
-                        type: "object",
-                        properties: {
-                            name: { type: "string" },
-                            price: { type: "string" },
-                            note: { type: "string" }
-                        },
-                        required: ["name", "price", "note"]
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model: "openrouter/free",
+                messages: [
+                    { role: "system", content: prompt },
+                    { role: "user", content: JSON.stringify(titles, null, 2) }
+                ],
+                response_format: {
+                    type: "json_schema",
+                    json_schema: {
+                        name: "deals",
+                        strict: true,
+                        schema: {
+                            type: "object",
+                            properties: {
+                                deals: {
+                                    type: "array",
+                                    items: {
+                                        type: "object",
+                                        properties: {
+                                            name: { type: "string" },
+                                            price: { type: "string" },
+                                            note: { type: "string" }
+                                        },
+                                        required: ["name", "price", "note"],
+                                        additionalProperties: false
+                                    }
+                                }
+                            },
+                            required: ["deals"],
+                            additionalProperties: false
+                        }
                     }
                 }
-            }
+            })
         });
-        return result.response as unknown as Array<{ name: string; price: string; note: string }>;
+
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error(`OpenRouter request failed: ${response.status} ${response.statusText}, body=${errText}`);
+            return null;
+        }
+
+        const data = await response.json() as {
+            model?: string;
+            choices?: Array<{ message?: { content?: string } }>;
+        };
+        const content = data.choices?.[0]?.message?.content;
+        if (!content) {
+            console.error("OpenRouter response missing content:", JSON.stringify(data));
+            return null;
+        }
+
+        const parsed = JSON.parse(content) as { deals?: Array<{ name: string; price: string; note: string }> };
+        if (!parsed.deals || !Array.isArray(parsed.deals)) {
+            console.error("OpenRouter response missing deals array:", content);
+            return null;
+        }
+        return parsed.deals;
     } catch (error) {
-        // Handle "JSON Mode couldn't be met" error from Cloudflare Workers AI
-        // https://developers.cloudflare.com/workers-ai/features/json-mode/
-        // Return null to signal that AI parsing failed - caller should use regex fallback without caching
+        // If OpenRouter fails (network error, JSON parse error, etc.), return null
+        // to signal that AI parsing failed - caller should use regex fallback without caching
         console.error("AI title parsing failed:", error);
         return null;
     }

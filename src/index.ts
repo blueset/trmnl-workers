@@ -9,7 +9,7 @@ import uspto from "./uspto";
 interface Env {
   TRMNL_WORKERS_KV: KVNamespace;
   GITHUB_TOKEN?: string;
-  AI: Ai;
+  OPENROUTER_API_KEY: string;
 }
 
 export default {
