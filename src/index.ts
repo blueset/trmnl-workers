@@ -25,7 +25,7 @@ export default {
     } else if (request.method === "GET" && url.pathname === "/tatoeba") {
         return tatoeba.fetch(request);
     } else if (request.method === "GET" && url.pathname === "/slickdeals") {
-        return slickdeals.fetch(request, env);
+        return slickdeals.fetch(request, env, ctx);
     } else if (request.method === "GET" && url.pathname === "/transit") {
         return transit.fetch(request);
       } else if (request.method === "GET" && url.pathname === "/uspto") {

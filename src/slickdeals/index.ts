@@ -1,24 +1,20 @@
 import { DOMParser } from '@xmldom/xmldom';
 
-// TTL Configuration (in milliseconds)
-const RESPONSE_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-const TITLE_CACHE_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
+const RESPONSE_FRESH_TTL_SECONDS = 6 * 60 * 60;
+const RESPONSE_STALE_TTL_SECONDS = 18 * 60 * 60;
+const RESPONSE_RETENTION_TTL_SECONDS = RESPONSE_FRESH_TTL_SECONDS + RESPONSE_STALE_TTL_SECONDS;
+const TITLE_CACHE_TTL_SECONDS = 72 * 60 * 60;
+const KV_EDGE_CACHE_TTL_SECONDS = 60;
+const STALE_EDGE_CACHE_TTL_SECONDS = 60;
+const RESPONSE_CACHE_KEY_PREFIX = "slickdeals:response:";
+const TITLE_CACHE_KEY_PREFIX = "slickdeals:title:";
+const FRESH_CACHE_CONTROL = `public, max-age=300, s-maxage=${RESPONSE_FRESH_TTL_SECONDS}, stale-while-revalidate=${RESPONSE_STALE_TTL_SECONDS}`;
+const STALE_CACHE_CONTROL = `public, max-age=0, s-maxage=${STALE_EDGE_CACHE_TTL_SECONDS}, must-revalidate`;
 
-// KV key for the cache
-const CACHE_KV_KEY = "slickdeals_cache";
-
-// Cache structure stored in KV
-interface CacheData {
-    // Response cache: keyed by mode value
-    responseCache: Record<string, {
-        data: DealResult[];
-        timestamp: number;
-    }>;
-    // Title cache: keyed by input title string
-    titleCache: Record<string, {
-        parsed: ParsedTitle;
-        timestamp: number;
-    }>;
+interface CachedResponse {
+    body: string;
+    timestamp: number;
+    etag: string;
 }
 
 interface DealResult {
@@ -45,6 +41,105 @@ interface Env {
     TRMNL_WORKERS_KV: KVNamespace;
 }
 
+interface CloudflareCacheStorage extends CacheStorage {
+    readonly default: Cache;
+}
+
+function responseCacheKey(mode: string): string {
+    return `${RESPONSE_CACHE_KEY_PREFIX}${mode}`;
+}
+
+async function titleCacheKey(title: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(title));
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    return `${TITLE_CACHE_KEY_PREFIX}${hash}`;
+}
+
+function edgeCacheKey(request: Request, mode: string): Request {
+    const url = new URL(request.url);
+    url.search = "";
+    url.searchParams.set("mode", mode);
+    return new Request(url.toString(), { method: "GET" });
+}
+
+function isCachedResponse(value: unknown): value is CachedResponse {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+    return typeof candidate.body === "string"
+        && typeof candidate.timestamp === "number"
+        && typeof candidate.etag === "string";
+}
+
+function isParsedTitle(value: unknown): value is ParsedTitle {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+    return typeof candidate.name === "string"
+        && typeof candidate.price === "string"
+        && typeof candidate.note === "string";
+}
+
+async function getCachedResponse(kv: KVNamespace, mode: string): Promise<CachedResponse | null> {
+    const value = await kv.get<unknown>(responseCacheKey(mode), {
+        type: "json",
+        cacheTtl: KV_EDGE_CACHE_TTL_SECONDS,
+    });
+
+    if (!isCachedResponse(value)) {
+        return null;
+    }
+
+    return value;
+}
+
+async function putCachedResponse(kv: KVNamespace, mode: string, value: CachedResponse): Promise<void> {
+    await kv.put(responseCacheKey(mode), JSON.stringify(value), {
+        expirationTtl: RESPONSE_RETENTION_TTL_SECONDS,
+    });
+}
+
+async function getCachedTitles(
+    kv: KVNamespace,
+    titles: string[],
+): Promise<Map<string, ParsedTitle>> {
+    if (titles.length === 0) {
+        return new Map();
+    }
+
+    const titleKeyPairs = await Promise.all(
+        titles.map(async title => [title, await titleCacheKey(title)] as const)
+    );
+    const values = await kv.get<unknown>(
+        titleKeyPairs.map(([, key]) => key),
+        { type: "json", cacheTtl: KV_EDGE_CACHE_TTL_SECONDS }
+    );
+
+    const parsedTitles = new Map<string, ParsedTitle>();
+    for (const [title, key] of titleKeyPairs) {
+        const value = values.get(key);
+        if (isParsedTitle(value)) {
+            parsedTitles.set(title, value);
+        }
+    }
+
+    return parsedTitles;
+}
+
+async function putCachedTitle(kv: KVNamespace, title: string, parsed: ParsedTitle): Promise<void> {
+    await kv.put(await titleCacheKey(title), JSON.stringify(parsed), {
+        expirationTtl: TITLE_CACHE_TTL_SECONDS,
+    });
+}
+
+function isResponseFresh(timestamp: number): boolean {
+    return Date.now() - timestamp < RESPONSE_FRESH_TTL_SECONDS * 1000;
+}
+
 function shortDurationFromNow(timestamp: number): string {
     const diffMs = Date.now() - timestamp;
     const diffMinutes = Math.floor(diffMs / (60 * 1000));
@@ -58,50 +153,6 @@ function shortDurationFromNow(timestamp: number): string {
     } else {
         const days = Math.floor(diffMinutes / 1440);
         return format.format(-days, 'day');
-    }
-}
-
-async function getCache(kv: KVNamespace): Promise<CacheData> {
-    const data = await kv.get(CACHE_KV_KEY);
-    if (data) {
-        try {
-            return JSON.parse(data) as CacheData;
-        } catch {
-            // If cache data is corrupted, return empty cache
-            return { responseCache: {}, titleCache: {} };
-        }
-    }
-    return { responseCache: {}, titleCache: {} };
-}
-
-async function setCache(kv: KVNamespace, cache: CacheData): Promise<void> {
-    await kv.put(CACHE_KV_KEY, JSON.stringify(cache));
-}
-
-function isResponseCacheValid(timestamp: number): boolean {
-    return Date.now() - timestamp < RESPONSE_CACHE_TTL_MS;
-}
-
-function isTitleCacheValid(timestamp: number): boolean {
-    return Date.now() - timestamp < TITLE_CACHE_TTL_MS;
-}
-
-// Clean expired items only when we need to write new values
-function cleanExpiredItems(cache: CacheData): void {
-    const now = Date.now();
-    
-    // Clean expired response cache entries
-    for (const mode of Object.keys(cache.responseCache)) {
-        if (now - cache.responseCache[mode].timestamp >= RESPONSE_CACHE_TTL_MS) {
-            delete cache.responseCache[mode];
-        }
-    }
-    
-    // Clean expired title cache entries
-    for (const title of Object.keys(cache.titleCache)) {
-        if (now - cache.titleCache[title].timestamp >= TITLE_CACHE_TTL_MS) {
-            delete cache.titleCache[title];
-        }
     }
 }
 
@@ -122,178 +173,254 @@ async function getFeedText(mode: string): Promise<string> {
     }
 }
 
+async function createEtag(body: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    return `"${hash}"`;
+}
+
+function buildCacheableResponse(cached: CachedResponse, stale = false): Response {
+    return new Response(cached.body, {
+        headers: {
+            "content-type": "application/json",
+            "cache-control": stale ? STALE_CACHE_CONTROL : FRESH_CACHE_CONTROL,
+            "etag": cached.etag,
+        },
+    });
+}
+
+function etagMatches(request: Request, etag: string | null): boolean {
+    const ifNoneMatch = request.headers.get("if-none-match");
+    if (!ifNoneMatch || !etag) {
+        return false;
+    }
+
+    const normalizedEtag = etag.replace(/^W\//, "");
+    return ifNoneMatch.split(",").some(value => {
+        const candidate = value.trim();
+        return candidate === "*" || candidate.replace(/^W\//, "") === normalizedEtag;
+    });
+}
+
+function respond(
+    request: Request,
+    response: Response,
+    cacheStatus: string,
+    cacheLayer?: string,
+): Response {
+    const headers = new Headers(response.headers);
+    headers.set("x-cache", cacheStatus);
+    if (cacheLayer) {
+        headers.set("x-cache-layer", cacheLayer);
+    }
+
+    if (etagMatches(request, headers.get("etag"))) {
+        return new Response(null, { status: 304, headers });
+    }
+
+    return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+    });
+}
+
+function getCachedDeals(cached: CachedResponse | null): DealResult[] {
+    if (!cached) {
+        return [];
+    }
+
+    try {
+        const value: unknown = JSON.parse(cached.body);
+        return Array.isArray(value) ? value as DealResult[] : [];
+    } catch {
+        return [];
+    }
+}
+
+function buildErrorFallback(cached: CachedResponse | null): Response {
+    const cachedDeals = getCachedDeals(cached);
+    return new Response(JSON.stringify([
+        {
+            name: cached?.timestamp ? `Data from ${shortDurationFromNow(cached.timestamp)}` : "No data available",
+            link: "",
+            content: {
+                html: "<p>Error fetching data from Slickdeals.</p>",
+                text: "Error fetching data from Slickdeals."
+            },
+        } satisfies DealResult,
+        ...cachedDeals,
+    ]), {
+        headers: {
+            "content-type": "application/json",
+            "cache-control": "no-store",
+            "x-cache": "ERROR_FALLBACK",
+        },
+    });
+}
+
+async function refreshDeals(
+    mode: string,
+    bypassTitleCache: boolean,
+    env: Env,
+): Promise<CachedResponse | null> {
+    const text = await getFeedText(mode);
+    if (!text) {
+        return null;
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(text, "text/xml");
+    const items = doc.getElementsByTagName("item");
+
+    const result: DealResult[] = [];
+    const originalTitles: string[] = [];
+
+    for (let i = 0; i < Math.min(15, items.length); i++) {
+        const item = items[i];
+        const title = item.getElementsByTagName("title")[0]?.textContent || "";
+        originalTitles.push(title);
+
+        let contentEncoded = "";
+        const contentEncodedNode = item.getElementsByTagNameNS("http://purl.org/rss/1.0/modules/content/", "encoded")[0]
+            || item.getElementsByTagName("content:encoded")[0];
+        if (contentEncodedNode) {
+            contentEncoded = contentEncodedNode.textContent || "";
+        }
+
+        const imgMatch = contentEncoded.match(/<img src="([^"]+)"/);
+        const image = imgMatch ? imgMatch[1] : "";
+
+        const scoreMatch = contentEncoded.match(/Thumb Score:\s*([+-]?\d+)/);
+        const thumbScore = scoreMatch ? scoreMatch[1] : undefined;
+
+        let cleanedHtml = contentEncoded.replace(/<img[^>]*>/gi, "");
+        cleanedHtml = cleanedHtml.replace(/Thumb Score:\s*[+-]?\d+/gi, "");
+        const contentText = cleanedHtml.replace(/<[^>]+>/g, "").trim();
+
+        const link = item.getElementsByTagName("link")[0]?.textContent || "";
+
+        result.push({
+            name: title,
+            price: undefined,
+            note: undefined,
+            image,
+            thumbScore,
+            link,
+            content: {
+                html: cleanedHtml,
+                text: contentText
+            }
+        });
+    }
+
+    const uniqueTitles = Array.from(new Set(originalTitles));
+    const cachedParsedTitles = bypassTitleCache
+        ? new Map<string, ParsedTitle>()
+        : await getCachedTitles(env.TRMNL_WORKERS_KV, uniqueTitles);
+    const titlesToParseWithAI = uniqueTitles.filter(title => !cachedParsedTitles.has(title));
+    const titleWrites: Promise<void>[] = [];
+
+    if (titlesToParseWithAI.length > 0) {
+        const aiParsedTitles = await parseTitleAI(titlesToParseWithAI, env.OPENROUTER_API_KEY);
+
+        if (aiParsedTitles && aiParsedTitles.length === titlesToParseWithAI.length) {
+            for (let i = 0; i < titlesToParseWithAI.length; i++) {
+                const title = titlesToParseWithAI[i];
+                const parsed = aiParsedTitles[i];
+                cachedParsedTitles.set(title, parsed);
+                titleWrites.push(putCachedTitle(env.TRMNL_WORKERS_KV, title, parsed));
+            }
+        } else {
+            for (const title of titlesToParseWithAI) {
+                cachedParsedTitles.set(title, parseTitle(title));
+            }
+        }
+    }
+
+    for (let i = 0; i < result.length; i++) {
+        const parsed = cachedParsedTitles.get(originalTitles[i]);
+        if (parsed) {
+            result[i].name = parsed.name;
+            result[i].price = parsed.price || undefined;
+            result[i].note = parsed.note || undefined;
+        }
+    }
+
+    const body = JSON.stringify(result);
+    const cachedResponse: CachedResponse = {
+        body,
+        timestamp: Date.now(),
+        etag: await createEtag(body),
+    };
+
+    await Promise.all([
+        ...titleWrites,
+        putCachedResponse(env.TRMNL_WORKERS_KV, mode, cachedResponse),
+    ]);
+
+    return cachedResponse;
+}
+
+async function refreshAndPopulateEdgeCache(
+    cache: Cache,
+    cacheKey: Request,
+    mode: string,
+    bypassTitleCache: boolean,
+    env: Env,
+): Promise<void> {
+    const refreshed = await refreshDeals(mode, bypassTitleCache, env);
+    if (refreshed) {
+        await cache.put(cacheKey, buildCacheableResponse(refreshed));
+    }
+}
+
 export default {
-    async fetch(request: Request, env: Env): Promise<Response> {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
         const mode = url.searchParams.get('mode') || 'popdeals';
         const bypassResponseCache = url.searchParams.get('bypass_response_cache') === 'true';
         const bypassTitleCache = url.searchParams.get('bypass_title_cache') === 'true';
-        
-        // Load cache from KV
-        const cache = await getCache(env.TRMNL_WORKERS_KV);
-        
-        // Check if we have a valid cached response for this mode
-        const responseCacheEntry = cache.responseCache[mode];
-        if (!bypassResponseCache && responseCacheEntry && isResponseCacheValid(responseCacheEntry.timestamp)) {
-            return new Response(JSON.stringify(responseCacheEntry.data), {
-                headers: { 
-                    "content-type": "application/json",
-                    "x-cache": "HIT"
-                }
-            });
-        }
-        
-        const text = await getFeedText(mode);
 
-        if (!text) {
-            return new Response(JSON.stringify([
-                {
-                    name: responseCacheEntry?.timestamp ? `Data from ${shortDurationFromNow(responseCacheEntry.timestamp)}` : "No data available",
-                    content: {
-                        html: "<p>Error fetching data from Slickdeals.</p>",
-                        text: "Error fetching data from Slickdeals."
-                    },
-                } as DealResult,
-                ...(responseCacheEntry?.data || [])
-            ]), {
-                headers: { 
-                    "content-type": "application/json",
-                    "x-cache": "ERROR_FALLBACK"
-                }
-            });
-        }
-        
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(text, "text/xml");
-        const items = doc.getElementsByTagName("item");
-        
-        const result: DealResult[] = [];
-        const originalTitles: string[] = [];
+        const cache = (caches as CloudflareCacheStorage).default;
+        const cacheKey = edgeCacheKey(request, mode);
 
-        for (let i = 0; i < Math.min(15, items.length); i++) {
-            const item = items[i];
-            const title = item.getElementsByTagName("title")[0]?.textContent || "";
-            originalTitles.push(title);
-            
-            // Use getElementsByTagNameNS for content:encoded if possible, otherwise fallback to tag name search
-            let contentEncoded = "";
-            const contentEncodedNode = item.getElementsByTagNameNS("http://purl.org/rss/1.0/modules/content/", "encoded")[0] 
-                                    || item.getElementsByTagName("content:encoded")[0];
-            if (contentEncodedNode) {
-                contentEncoded = contentEncodedNode.textContent || "";
-            }
-            
-            // Parse content for image and thumbScore
-            const imgMatch = contentEncoded.match(/<img src="([^"]+)"/);
-            const image = imgMatch ? imgMatch[1] : "";
-            
-            const scoreMatch = contentEncoded.match(/Thumb Score:\s*([+-]?\d+)/);
-            const thumbScore = scoreMatch ? scoreMatch[1] : undefined;
-            
-            // Remove image tags and thumb score from HTML content
-            let cleanedHtml = contentEncoded.replace(/<img[^>]*>/gi, "");
-            cleanedHtml = cleanedHtml.replace(/Thumb Score:\s*[+-]?\d+/gi, "");
-            
-            // Content text (strip tags)
-            const contentText = cleanedHtml.replace(/<[^>]+>/g, "").trim();
-
-            const link = item.getElementsByTagName("link")[0]?.textContent || "";
-            
-            result.push({
-                name: title,
-                price: undefined,
-                note: undefined,
-                image,
-                thumbScore,
-                link,
-                content: {
-                    html: cleanedHtml,
-                    text: contentText
-                }
-            });
-        }
-
-        // Check title cache and determine which titles need AI parsing
-        const titlesToParseWithAI: string[] = [];
-        const titleIndexMap: Map<string, number[]> = new Map(); // Map title to result indices
-        const cachedParsedTitles: Map<string, ParsedTitle> = new Map();
-        
-        for (let i = 0; i < originalTitles.length; i++) {
-            const title = originalTitles[i];
-            const titleCacheEntry = cache.titleCache[title];
-            
-            if (!bypassTitleCache && titleCacheEntry && isTitleCacheValid(titleCacheEntry.timestamp)) {
-                // Use cached parsed title
-                cachedParsedTitles.set(title, titleCacheEntry.parsed);
-            } else {
-                // Need to parse this title with AI
-                if (!titleIndexMap.has(title)) {
-                    titlesToParseWithAI.push(title);
-                    titleIndexMap.set(title, []);
-                }
-                const indices = titleIndexMap.get(title);
-                if (indices) {
-                    indices.push(i);
-                }
-            }
-        }
-        
-        // Parse titles with AI if needed
-        let needsKVWrite = false;
-        if (titlesToParseWithAI.length > 0) {
-            const aiParsedTitles = await parseTitleAI(titlesToParseWithAI, env.OPENROUTER_API_KEY);
-            
-            if (aiParsedTitles) {
-                // AI succeeded - cache the parsed titles
-                const now = Date.now();
-                for (let j = 0; j < titlesToParseWithAI.length; j++) {
-                    const title = titlesToParseWithAI[j];
-                    const parsed = aiParsedTitles[j];
-                    cache.titleCache[title] = {
-                        parsed,
-                        timestamp: now
-                    };
-                    cachedParsedTitles.set(title, parsed);
-                }
-                needsKVWrite = true;
-            } else {
-                // AI failed - use regex fallback without caching
-                for (const title of titlesToParseWithAI) {
-                    cachedParsedTitles.set(title, parseTitle(title));
-                }
+        if (!bypassResponseCache) {
+            const edgeResponse = await cache.match(cacheKey);
+            if (edgeResponse) {
+                return respond(request, edgeResponse, "HIT", "EDGE");
             }
         }
 
-        // Merge parsed titles into result
-        for (let i = 0; i < result.length; i++) {
-            const title = originalTitles[i];
-            const parsed = cachedParsedTitles.get(title);
-            if (parsed) {
-                result[i].name = parsed.name;
-                result[i].price = parsed.price || undefined;
-                result[i].note = parsed.note || undefined;
+        const cachedResponse = await getCachedResponse(env.TRMNL_WORKERS_KV, mode);
+
+        if (!bypassResponseCache && cachedResponse) {
+            if (isResponseFresh(cachedResponse.timestamp)) {
+                const response = buildCacheableResponse(cachedResponse);
+                ctx.waitUntil(cache.put(cacheKey, response.clone()));
+                return respond(request, response, "HIT", "KV");
             }
+
+            const staleResponse = buildCacheableResponse(cachedResponse, true);
+            ctx.waitUntil((async () => {
+                try {
+                    await cache.put(cacheKey, staleResponse.clone());
+                } catch (error) {
+                    console.error("Failed to put stale Slickdeals response in edge cache", error);
+                }
+                await refreshAndPopulateEdgeCache(cache, cacheKey, mode, bypassTitleCache, env);
+            })());
+            return respond(request, staleResponse, "STALE", "KV");
         }
-        
-        // Update response cache
-        cache.responseCache[mode] = {
-            data: result,
-            timestamp: Date.now()
-        };
-        needsKVWrite = true;
-        
-        // Clean expired items before writing to KV
-        if (needsKVWrite) {
-            cleanExpiredItems(cache);
-            await setCache(env.TRMNL_WORKERS_KV, cache);
+
+        const refreshed = await refreshDeals(mode, bypassTitleCache, env);
+        if (!refreshed) {
+            return buildErrorFallback(cachedResponse);
         }
-        
-        return new Response(JSON.stringify(result), {
-            headers: { 
-                "content-type": "application/json",
-                "x-cache": "MISS"
-            }
-        });
+
+        const response = buildCacheableResponse(refreshed);
+        ctx.waitUntil(cache.put(cacheKey, response.clone()));
+        return respond(request, response, "MISS", "ORIGIN");
     }
 }
 
