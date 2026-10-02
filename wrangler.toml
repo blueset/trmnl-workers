@@ -10,6 +10,10 @@ TRMNL_DATA_SOURCE = "146195"
 TRMNL_SCHEDULE_TARGET = "679434"
 SCHEDULE_PAD_MINUTES = "15"
 SCHEDULE_UPDATER_DRY_RUN = "true"
+# /oidc/token CORS proxy for the Holiday Editor (comma-separated lists; empty client IDs = any).
+OIDC_PROXY_ALLOWED_ORIGINS = "https://blueset.github.io"
+OIDC_PROXY_ALLOW_LOCALHOST = "true"
+OIDC_PROXY_ALLOWED_CLIENT_IDS = ""
 
 [[kv_namespaces]]
 binding = "TRMNL_WORKERS_KV"

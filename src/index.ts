@@ -5,6 +5,7 @@ import tatoeba from "./tatoeba";
 import slickdeals from "./slickdeals";
 import transit from "./transit";
 import uspto from "./uspto";
+import oidcToken from "./oidc-token";
 import { scheduled } from "./schedule-updater";
 
 type Env = Omit<WorkerBindings, "GITHUB_TOKEN" | "TRMNL_API_KEY"> &
@@ -29,6 +30,8 @@ export default {
         return transit.fetch(request);
       } else if (request.method === "GET" && url.pathname === "/uspto") {
         return uspto.fetch(request, env, ctx);
+    } else if (url.pathname === "/oidc/token") {
+        return oidcToken.fetch(request, env);
     }
 
     return new Response("Not Found", { status: 404 });

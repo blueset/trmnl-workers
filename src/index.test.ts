@@ -7,6 +7,7 @@ vi.mock("./tatoeba", () => ({ default: { fetch: vi.fn(() => new Response("tatoeb
 vi.mock("./slickdeals", () => ({ default: { fetch: vi.fn(() => new Response("slickdeals")) } }));
 vi.mock("./transit", () => ({ default: { fetch: vi.fn(() => new Response("transit")) } }));
 vi.mock("./uspto", () => ({ default: { fetch: vi.fn(() => new Response("uspto")) } }));
+vi.mock("./oidc-token", () => ({ default: { fetch: vi.fn(() => new Response("oidc-token")) } }));
 vi.mock("./schedule-updater", () => ({ scheduled: vi.fn() }));
 
 import worker from "./index";
@@ -17,6 +18,7 @@ const env = {
   OPENROUTER_API_KEY: "test",
   TRMNL_DATA_SOURCE: "", TRMNL_SCHEDULE_TARGET: "",
   SCHEDULE_PAD_MINUTES: "15", SCHEDULE_UPDATER_DRY_RUN: "true",
+  OIDC_PROXY_ALLOWED_ORIGINS: "", OIDC_PROXY_ALLOW_LOCALHOST: "false", OIDC_PROXY_ALLOWED_CLIENT_IDS: "",
 };
 const ctx: ExecutionContext = { waitUntil() {}, passThroughOnException() {}, props: {} };
 
@@ -33,6 +35,13 @@ describe("Worker dispatch", () => {
   it("retains 404 for unknown routes and non-GET requests", async () => {
     expect((await worker.fetch(new Request("https://example.com/missing"), env, ctx)).status).toBe(404);
     expect((await worker.fetch(new Request("https://example.com/mdn", { method: "POST" }), env, ctx)).status).toBe(404);
+  });
+
+  it("routes /oidc/token for POST and OPTIONS", async () => {
+    for (const method of ["POST", "OPTIONS"]) {
+      const response = await worker.fetch(new Request("https://example.com/oidc/token", { method }), env, ctx);
+      expect(await response.text()).toBe("oidc-token");
+    }
   });
 
   it("delegates the scheduled event and preserves failures", async () => {

@@ -96,11 +96,6 @@ Set production resource IDs in `wrangler.toml` `[vars]`; keep the timezone at
 `America/Los_Angeles`, matching the TRMNL account. Blank/malformed configuration
 fails only scheduled invocations, not unrelated HTTP routes.
 
-Use `.env.example` as a placeholder reference and add the local values to the
-existing ignored `.env.local` without replacing existing recipe credentials.
-An ignored `.dev.vars` file is an alternative, but using it suppresses `.env`
-loading, so it must include all needed local secrets.
-
 Regenerate binding types from placeholders (never actual secret values):
 
 ```powershell
