@@ -2,6 +2,15 @@ name = "trmnl"
 main = "src/index.ts"
 compatibility_date = "2024-05-01"
 
+[triggers]
+crons = ["7,37 * * * *"]
+
+[vars]
+TRMNL_DATA_SOURCE = "146195"
+TRMNL_SCHEDULE_TARGET = "679434"
+SCHEDULE_PAD_MINUTES = "15"
+SCHEDULE_UPDATER_DRY_RUN = "true"
+
 [[kv_namespaces]]
 binding = "TRMNL_WORKERS_KV"
 id = "bd9dad65430948879f23dfba951de218"

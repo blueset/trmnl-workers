@@ -1,6 +1,7 @@
 # Eana’s TRMNL Cloud Workers
 
-A Cloudflare Worker that serves requests for [my TRMNL recipies](https://github.com/blueset/trmnl-recipes).
+A Cloudflare Worker that serves requests for [my TRMNL recipies](https://github.com/blueset/trmnl-recipes)
+and updates a calendar-driven TRMNL playlist schedule.
 
 ## Develop
 

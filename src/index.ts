@@ -5,14 +5,13 @@ import tatoeba from "./tatoeba";
 import slickdeals from "./slickdeals";
 import transit from "./transit";
 import uspto from "./uspto";
+import { scheduled } from "./schedule-updater";
 
-interface Env {
-  TRMNL_WORKERS_KV: KVNamespace;
-  GITHUB_TOKEN?: string;
-  OPENROUTER_API_KEY: string;
-}
+type Env = Omit<WorkerBindings, "GITHUB_TOKEN" | "TRMNL_API_KEY"> &
+  Partial<Pick<WorkerBindings, "GITHUB_TOKEN" | "TRMNL_API_KEY">>;
 
 export default {
+  scheduled,
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
@@ -34,4 +33,4 @@ export default {
 
     return new Response("Not Found", { status: 404 });
   },
-};
+} satisfies ExportedHandler<Env>;
