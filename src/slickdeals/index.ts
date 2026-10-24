@@ -320,11 +320,12 @@ async function refreshDeals(
         : await getCachedTitles(env.TRMNL_WORKERS_KV, uniqueTitles);
     const titlesToParseWithAI = uniqueTitles.filter(title => !cachedParsedTitles.has(title));
     const titleWrites: Promise<void>[] = [];
+    let freshTitleSource = "ai";
 
     if (titlesToParseWithAI.length > 0) {
-        const aiParsedTitles = await parseTitleAI(titlesToParseWithAI, env.OPENROUTER_API_KEY);
+        const aiParsedTitles = await parseTitleAI(titlesToParseWithAI, env.OPENROUTER_API_KEY, mode);
 
-        if (aiParsedTitles && aiParsedTitles.length === titlesToParseWithAI.length) {
+        if (aiParsedTitles) {
             for (let i = 0; i < titlesToParseWithAI.length; i++) {
                 const title = titlesToParseWithAI[i];
                 const parsed = aiParsedTitles[i];
@@ -332,6 +333,7 @@ async function refreshDeals(
                 titleWrites.push(putCachedTitle(env.TRMNL_WORKERS_KV, title, parsed));
             }
         } else {
+            freshTitleSource = "regex";
             for (const title of titlesToParseWithAI) {
                 cachedParsedTitles.set(title, parseTitle(title));
             }
@@ -341,6 +343,24 @@ async function refreshDeals(
     for (let i = 0; i < result.length; i++) {
         const parsed = cachedParsedTitles.get(originalTitles[i]);
         if (parsed) {
+            const issues = [];
+            if (!parsed.name.trim()) issues.push("empty_name");
+            if (!parsed.price.trim()) issues.push("empty_price");
+            const diagnostic = {
+                event: "slickdeals.title_parsed",
+                mode,
+                source: titlesToParseWithAI.includes(originalTitles[i]) ? freshTitleSource : "cache",
+                title: originalTitles[i].slice(0, 2000),
+                name: parsed.name.slice(0, 2000),
+                price: parsed.price.slice(0, 2000),
+                note: parsed.note.slice(0, 2000),
+                issues,
+            };
+            if (issues.length > 0) {
+                console.warn(diagnostic);
+            } else {
+                console.log(diagnostic);
+            }
             result[i].name = parsed.name;
             result[i].price = parsed.price || undefined;
             result[i].note = parsed.note || undefined;
@@ -524,7 +544,45 @@ const prompt = `You are a data extraction assistant. Your task is to parse a lis
 ### Task:
 Parse the following JSON input array into the corresponding JSON output object.`;
 
-async function parseTitleAI(titles: string[], apiKey: string): Promise<Array<{ name: string; price: string; note: string }> | null> {
+async function parseTitleAI(titles: string[], apiKey: string, mode: string): Promise<ParsedTitle[] | null> {
+    const started = Date.now();
+    const diagnostic: Record<string, unknown> = {
+        event: "slickdeals.openrouter_result",
+        mode,
+        requested_model: "openrouter/free",
+        titles: titles.map(title => title.slice(0, 2000)),
+        expected_count: titles.length,
+    };
+    let responseBody = "";
+    let content = "";
+    let failureOutcome = "request_error";
+
+    function logResult(outcome: string, error?: unknown) {
+        const entry = {
+            ...diagnostic,
+            outcome,
+            duration_ms: Date.now() - started,
+            ...(outcome !== "success" ? {
+                response_preview: responseBody.slice(0, 8000),
+                response_length: responseBody.length,
+                response_truncated: responseBody.length > 8000,
+                content_preview: content.slice(0, 8000),
+                content_length: content.length,
+                content_truncated: content.length > 8000,
+            } : {}),
+            ...(error !== undefined ? {
+                error_name: error instanceof Error ? error.name : "UnknownError",
+                error_message: error instanceof Error ? error.message : String(error),
+                error_stack: error instanceof Error ? error.stack : undefined,
+            } : {}),
+        };
+        if (outcome === "success") {
+            console.log(entry);
+        } else {
+            console.error(entry);
+        }
+    }
+
     try {
         const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
@@ -568,32 +626,67 @@ async function parseTitleAI(titles: string[], apiKey: string): Promise<Array<{ n
             })
         });
 
+        diagnostic.http_status = response.status;
+        diagnostic.http_status_text = response.statusText;
+        responseBody = await response.text();
         if (!response.ok) {
-            const errText = await response.text();
-            console.error(`OpenRouter request failed: ${response.status} ${response.statusText}, body=${errText}`);
+            logResult("http_error");
             return null;
         }
 
-        const data = await response.json() as {
+        failureOutcome = "response_json_error";
+        const data = JSON.parse(responseBody) as {
+            id?: string;
             model?: string;
-            choices?: Array<{ message?: { content?: string } }>;
-        };
-        const content = data.choices?.[0]?.message?.content;
-        if (!content) {
-            console.error("OpenRouter response missing content:", JSON.stringify(data));
+            provider?: string;
+            usage?: unknown;
+            choices?: Array<{
+                finish_reason?: string;
+                native_finish_reason?: string;
+                message?: { content?: string | null };
+            }>;
+        } | null;
+        const choice = data?.choices?.[0];
+        diagnostic.generation_id = data?.id;
+        diagnostic.model = data?.model;
+        diagnostic.provider = data?.provider;
+        diagnostic.usage = data?.usage;
+        diagnostic.finish_reason = choice?.finish_reason;
+        diagnostic.native_finish_reason = choice?.native_finish_reason;
+        const responseContent = choice?.message?.content;
+        if (!responseContent) {
+            logResult("missing_content");
+            return null;
+        }
+        if (typeof responseContent !== "string") {
+            logResult("invalid_content");
             return null;
         }
 
-        const parsed = JSON.parse(content) as { deals?: Array<{ name: string; price: string; note: string }> };
-        if (!parsed.deals || !Array.isArray(parsed.deals)) {
-            console.error("OpenRouter response missing deals array:", content);
+        content = responseContent;
+        failureOutcome = "invalid_json";
+        const parsed = JSON.parse(content) as { deals?: unknown } | null;
+        if (!parsed || !Array.isArray(parsed.deals)) {
+            logResult("missing_deals");
             return null;
         }
-        return parsed.deals;
+        const deals = parsed.deals;
+        diagnostic.actual_count = deals.length;
+        if (deals.length !== titles.length) {
+            logResult("count_mismatch");
+            return null;
+        }
+        if (!deals.every(isParsedTitle)) {
+            diagnostic.invalid_indices = deals.flatMap((deal, index) => isParsedTitle(deal) ? [] : [index]);
+            logResult("invalid_deals");
+            return null;
+        }
+        logResult("success");
+        return deals;
     } catch (error) {
         // If OpenRouter fails (network error, JSON parse error, etc.), return null
         // to signal that AI parsing failed - caller should use regex fallback without caching
-        console.error("AI title parsing failed:", error);
+        logResult(failureOutcome, error);
         return null;
     }
 }

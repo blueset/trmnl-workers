@@ -122,9 +122,13 @@ describe("slickdeals caching", () => {
     beforeEach(() => {
         vi.stubGlobal("fetch", fetchMock);
         fetchMock.mockReset();
+        vi.spyOn(console, "log").mockImplementation(() => undefined);
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        vi.spyOn(console, "error").mockImplementation(() => undefined);
     });
 
     afterEach(() => {
+        vi.restoreAllMocks();
         vi.unstubAllGlobals();
     });
 
@@ -263,5 +267,164 @@ describe("slickdeals caching", () => {
         await Promise.all(ctx.scheduled);
 
         expect(cache.put).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        {
+            outcome: "invalid_json",
+            content: "```json\n{\"deals\":[]}\n```",
+        },
+        {
+            outcome: "missing_content",
+            content: null,
+        },
+        {
+            outcome: "missing_deals",
+            content: '{"result":[]}',
+        },
+        {
+            outcome: "count_mismatch",
+            content: '{"deals":[]}',
+        },
+        {
+            outcome: "invalid_deals",
+            content: '{"deals":[{"name":"Test Product","price":10,"note":""}]}',
+        },
+    ])("logs $outcome with response context before regex fallback", async ({ outcome, content }) => {
+        const cache = createMockCache();
+        const kv = createMockKV();
+        const ctx = createExecutionContext();
+        vi.stubGlobal("caches", { default: cache });
+        fetchMock
+            .mockResolvedValueOnce(createFeedResponse())
+            .mockResolvedValueOnce(Response.json({
+                id: "gen-test",
+                model: "test-model",
+                provider: "test-provider",
+                choices: [{
+                    finish_reason: "stop",
+                    native_finish_reason: "stop",
+                    message: { content, reasoning: "Reasoning without a valid answer" },
+                }],
+                usage: { completion_tokens: 42 },
+            }));
+
+        const response = await slickdeals.fetch(
+            new Request("https://example.com/slickdeals"),
+            { TRMNL_WORKERS_KV: kv as unknown as KVNamespace, OPENROUTER_API_KEY: "test-secret" },
+            ctx
+        );
+        await Promise.all(ctx.scheduled);
+
+        expect(console.error).toHaveBeenCalledWith(expect.objectContaining({
+            event: "slickdeals.openrouter_result",
+            outcome,
+            mode: "popdeals",
+            titles: ["Test Product $10"],
+            generation_id: "gen-test",
+            model: "test-model",
+            provider: "test-provider",
+            finish_reason: "stop",
+            usage: { completion_tokens: 42 },
+            response_preview: expect.stringContaining("Reasoning without a valid answer"),
+        }));
+        if (outcome === "invalid_json") {
+            expect(console.error).toHaveBeenCalledWith(expect.objectContaining({
+                error_name: "SyntaxError",
+                error_message: expect.any(String),
+                content_preview: content,
+            }));
+        }
+        expect(console.log).toHaveBeenCalledWith(expect.objectContaining({
+            event: "slickdeals.title_parsed",
+            source: "regex",
+            title: "Test Product $10",
+            price: "$10",
+        }));
+        expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("test-secret");
+        expect(await response.json()).toEqual([
+            expect.objectContaining({ name: "Test Product", price: "$10" }),
+        ]);
+        expect(Array.from(kv.storage.keys()).some(key => key.startsWith("slickdeals:title:"))).toBe(false);
+    });
+
+    it("logs successful model metadata and suspicious output without changing the extracted result", async () => {
+        const cache = createMockCache();
+        const kv = createMockKV();
+        const ctx = createExecutionContext();
+        vi.stubGlobal("caches", { default: cache });
+        fetchMock
+            .mockResolvedValueOnce(createFeedResponse())
+            .mockResolvedValueOnce(Response.json({
+                id: "gen-empty-price",
+                model: "test-model",
+                choices: [{
+                    finish_reason: "stop",
+                    message: { content: '{"deals":[{"name":"Wrong product","price":"","note":""}]}' },
+                }],
+            }));
+
+        const response = await slickdeals.fetch(
+            new Request("https://example.com/slickdeals"),
+            { TRMNL_WORKERS_KV: kv as unknown as KVNamespace, OPENROUTER_API_KEY: "test" },
+            ctx
+        );
+        await Promise.all(ctx.scheduled);
+
+        expect(console.log).toHaveBeenCalledWith(expect.objectContaining({
+            event: "slickdeals.openrouter_result",
+            outcome: "success",
+            generation_id: "gen-empty-price",
+            model: "test-model",
+            expected_count: 1,
+            actual_count: 1,
+        }));
+        expect(console.warn).toHaveBeenCalledWith(expect.objectContaining({
+            event: "slickdeals.title_parsed",
+            source: "ai",
+            title: "Test Product $10",
+            name: "Wrong product",
+            price: "",
+            issues: ["empty_price"],
+        }));
+        expect(await response.json()).toEqual([expect.objectContaining({ name: "Wrong product" })]);
+    });
+
+    it.each(["http_error", "request_error", "response_json_error"])("logs %s with bounded diagnostics", async outcome => {
+        const cache = createMockCache();
+        const kv = createMockKV();
+        const ctx = createExecutionContext();
+        vi.stubGlobal("caches", { default: cache });
+        fetchMock.mockResolvedValueOnce(createFeedResponse());
+        if (outcome === "request_error") {
+            fetchMock.mockRejectedValueOnce(new Error("Connection reset"));
+        } else {
+            fetchMock.mockResolvedValueOnce(new Response("upstream failure ".repeat(2000), {
+                status: outcome === "http_error" ? 429 : 200,
+            }));
+        }
+
+        await slickdeals.fetch(
+            new Request("https://example.com/slickdeals"),
+            { TRMNL_WORKERS_KV: kv as unknown as KVNamespace, OPENROUTER_API_KEY: "test" },
+            ctx
+        );
+        await Promise.all(ctx.scheduled);
+
+        expect(console.error).toHaveBeenCalledWith(expect.objectContaining({
+            event: "slickdeals.openrouter_result",
+            outcome,
+            titles: ["Test Product $10"],
+            duration_ms: expect.any(Number),
+        }));
+        if (outcome !== "request_error") {
+            expect(console.error).toHaveBeenCalledWith(expect.objectContaining({
+                response_preview: expect.any(String),
+                response_length: 34000,
+                response_truncated: true,
+            }));
+            const log = vi.mocked(console.error).mock.calls[0][0];
+            expect(log.response_preview.length).toBeLessThan(34000);
+        }
     });
 });
