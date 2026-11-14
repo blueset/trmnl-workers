@@ -15,6 +15,14 @@ async function fetchRetry(url: string, init?: RequestInit, maxAttempts = 5): Pro
 export async function fetchRandomHex(): Promise<string> {
   const resp = await fetchRetry("https://codepoints.net/random", { redirect: "manual" });
   if (resp.status < 300 || resp.status >= 400) {
+    const body = (await resp.text()).slice(0, 300).replace(/\s+/g, " ");
+    console.error("codepoints: /random rejected", {
+      status: resp.status,
+      server: resp.headers.get("server"),
+      cfRay: resp.headers.get("cf-ray"),
+      cfMitigated: resp.headers.get("cf-mitigated"),
+      body,
+    });
     throw new Error(`Unexpected status from /random: ${resp.status}`);
   }
   const location = resp.headers.get("Location") || "";

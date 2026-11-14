@@ -68,6 +68,9 @@ export default {
         },
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      console.error("codepoints: falling back to cached value", message, err);
+
       // If main logic fails or times out, try to use cached value
       const cachedBody = await env.TRMNL_WORKERS_KV.get(KV_KEY);
       
@@ -78,12 +81,12 @@ export default {
             "content-type": "application/json; charset=utf-8",
             "cache-control": "no-store",
             "x-cache": "hit",
+            "x-fallback-reason": message.slice(0, 200),
           },
         });
       }
 
       // No cached value available, return error
-      const message = err instanceof Error ? err.message : "Unknown error";
       return new Response(
         JSON.stringify({ error: message }, null, 2),
         {
