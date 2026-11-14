@@ -40,6 +40,7 @@ passwords, cookies, or CSRF form replay:
 Malformed calendar/schedule responses fail visibly without applying a new
 schedule. Fetches have a 30-second deadline and a 2 MiB response limit. Writes are
 not retried within a run; the next invocation re-reads live state and reconciles.
+Redirect responses are rejected rather than forwarding credentials to another URL.
 Returned PUT windows must match the desired schedule before an update is logged
 as successful.
 

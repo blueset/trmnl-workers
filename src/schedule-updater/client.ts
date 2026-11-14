@@ -17,7 +17,8 @@ export class TrmnlClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const response = await this.request(`${BASE_URL}${path}`, {
+      const request = this.request;
+      const response = await request(`${BASE_URL}${path}`, {
         method: payload ? "PUT" : "GET",
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
@@ -25,7 +26,7 @@ export class TrmnlClient {
           ...(payload ? { "Content-Type": "application/json" } : {}),
         },
         body: payload ? JSON.stringify(payload) : undefined,
-        redirect: "error",
+        redirect: "manual",
         signal: controller.signal,
       });
       if (!response.ok) {
