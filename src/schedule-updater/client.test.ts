@@ -31,7 +31,7 @@ describe("TRMNL REST client", () => {
       Authorization: "Bearer trmnl_test", Accept: "application/json", "Content-Type": "application/json",
     });
     expect(init?.body).toBe(JSON.stringify({ week_schedules: rows }));
-    expect(init?.redirect).toBe("error");
+    expect(init?.redirect).toBe("manual");
     await expect(client.replaceSchedule("456", [])).rejects.toThrow("empty_write_refused");
     expect(request).toHaveBeenCalledTimes(3);
   });
@@ -47,7 +47,16 @@ describe("TRMNL REST client", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects network/redirect failures without echoing the raw error", async () => {
+  it("calls fetch without binding it to the client", async () => {
+    const request: typeof fetch = async function (this: unknown) {
+      if (this !== undefined) throw new TypeError("Illegal invocation");
+      return json({ data: { events: [] } });
+    };
+    await expect(new TrmnlClient("secret", request).calendar("123"))
+      .resolves.toEqual({ events: [], skippedEvents: 0 });
+  });
+
+  it("rejects network failures without echoing the raw error", async () => {
     const request = vi.fn<typeof fetch>().mockRejectedValue(new Error("secret in upstream error"));
     await expect(new TrmnlClient("secret", request).calendar("123"))
       .rejects.toThrow("calendar_get: network_error");
